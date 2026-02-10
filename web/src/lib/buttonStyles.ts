@@ -1,0 +1,1 @@
+export const generateButtonClass = "bg-white hover:bg-slate-50 text-slate-900 font-semibold border border-slate-200 shadow-sm transition-all active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center cursor-pointer";
