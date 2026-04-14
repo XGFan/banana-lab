@@ -1,8 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { Img2ImgPage } from '../Img2ImgPage';
 import { api } from '../../lib/api';
+
+function LocationProbe() {
+  const { search } = useLocation();
+  return <div data-testid="location-search">{search}</div>;
+}
 
 vi.mock('../../lib/api', () => ({
   api: {
@@ -18,7 +23,7 @@ vi.mock('../../lib/api', () => ({
   },
 }));
 
-vi.mock('prompt-editor-sdk', () => ({
+vi.mock('@xgfan/prompt-editor', () => ({
   PromptEditorSDK: ({ onSave, value }: any) => (
     <div data-testid="prompt-editor-sdk-modal">
       <button 
@@ -141,7 +146,7 @@ describe('Img2ImgPage UI', () => {
       expect(screen.getByAltText('ref-img-1')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('generate')); // Label is "Re-roll" when !isDirty && currentNodeId
+    fireEvent.click(screen.getByTestId('generate'));
 
     await waitFor(() => {
       expect(api.reroll).toHaveBeenCalledWith('node-1', {
@@ -155,8 +160,8 @@ describe('Img2ImgPage UI', () => {
   it('updates prompt via SDK and switches to generate mode (dirty state)', async () => {
      (api.getNode as any).mockResolvedValue({
       node: { id: 'node-1', prompt: 'initial' },
-      images: [],
-      results: [],
+      images: [{ id: 'img-1', file_path: '/init.png' }],
+      results: [{ id: 'r-1', image_id: 'img-1' }],
     });
     
     render(
@@ -169,8 +174,7 @@ describe('Img2ImgPage UI', () => {
       expect(screen.getByTestId('prompt')).toHaveValue('initial');
     });
 
-    // Open SDK
-    fireEvent.click(screen.getByTestId('edit-prompt-btn'));
+    fireEvent.click(screen.getByTestId('fork-prompt-btn'));
     await waitFor(() => expect(screen.getByTestId('prompt-editor-sdk-modal')).toBeInTheDocument());
 
     // Save changes -> "new prompt"
@@ -199,6 +203,69 @@ describe('Img2ImgPage UI', () => {
             parent_node_id: 'node-1'
         }));
         expect(api.reroll).not.toHaveBeenCalled();
+    });
+  });
+
+  it('automatically opens PromptEditor modal when action=new is in URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/?action=new']}>
+        <Img2ImgPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('prompt-editor-sdk-modal')).toBeInTheDocument();
+    });
+  });
+
+  it('handles fork flow correctly: prefill, open modal, and maintain parent semantics', async () => {
+    (api.getNode as any).mockResolvedValue({
+      node: { id: 'source-id', prompt: 'source prompt', reference_image_ids: ['img-ref-1'] },
+      images: [{ id: 'img-1', file_path: '/src.png' }],
+      results: [{ id: 'r-1', image_id: 'img-1' }],
+    });
+    (api.generate as any).mockResolvedValue({
+      node: { id: 'forked-id', prompt: 'forked prompt' },
+      images: [],
+      results: [],
+    });
+    (api.listLibrary as any).mockResolvedValue([
+        { id: 'img-ref-1', file_path: '/path/1.png', created_at: '', origin: 'uploaded' }
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={['/?node_id=source-id']}>
+        <LocationProbe />
+        <Img2ImgPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(api.getNode).toHaveBeenCalledWith('source-id');
+    });
+
+    fireEvent.click(screen.getByTestId('fork-prompt-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('prompt-editor-sdk-modal')).toBeInTheDocument();
+      const search = screen.getByTestId('location-search').textContent;
+      expect(search).not.toContain('action=fork');
+      expect(search).not.toContain('node_id=source-id');
+    });
+
+    fireEvent.click(screen.getByText('Save SDK'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('prompt-editor-sdk-modal')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('generate'));
+
+    await waitFor(() => {
+      expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({ 
+        parent_node_id: 'source-id',
+        prompt: 'new prompt' 
+      }));
     });
   });
 });

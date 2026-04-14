@@ -23,12 +23,12 @@ vi.mock('../../lib/api', () => ({
   imageUrl: (img: any) => img?.file_path || '',
 }));
 
-vi.mock('prompt-editor-sdk', () => {
+vi.mock('@xgfan/prompt-editor', () => {
   const React = require('react');
   const { forwardRef, useImperativeHandle, useState } = React;
   
   return {
-    PromptEditorSDK: forwardRef(({ onLibraryChange, value, initialLibrary }: any, ref: any) => {
+    PromptEditorSDK: forwardRef(({ onLibraryChange, value, initialLibrary, readOnly }: any, ref: any) => {
       const [fragments, setFragments] = useState(value?.fragments);
       const [shouldFail, setShouldFail] = useState(false);
 
@@ -43,8 +43,11 @@ vi.mock('prompt-editor-sdk', () => {
   
       return (
         <div data-testid="prompt-editor-sdk-modal">
+          {readOnly && <div data-testid="sdk-readonly-mode">ReadOnly Mode</div>}
           <button
+            type="button"
             data-testid="sdk-set-value-btn"
+            disabled={readOnly}
             onClick={() => {
                setShouldFail(false);
                setFragments({
@@ -57,7 +60,9 @@ vi.mock('prompt-editor-sdk', () => {
               Set Valid Value
           </button>
           <button
+            type="button"
             data-testid="sdk-set-invalid-btn"
+            disabled={readOnly}
             onClick={() => {
                setShouldFail(true);
             }}
@@ -65,7 +70,9 @@ vi.mock('prompt-editor-sdk', () => {
               Set Invalid Value
           </button>
           <button
+              type="button"
               data-testid="sdk-add-lib-btn"
+              disabled={readOnly}
               onClick={() => {
                   const newLibItem = {
                     groupOrder: ['new-snippet-id'],
@@ -102,6 +109,7 @@ describe('Img2ImgPage SDK Integration', () => {
     vi.clearAllMocks();
     (api.listPromptSnippets as any).mockResolvedValue([]);
     (api.replacePromptSnippets as any).mockImplementation(async (payload: any) => payload);
+    (api.getPromptTree as any).mockResolvedValue({});
     (api.getNode as any).mockResolvedValue({ node: { id: 'test-node', prompt: 'test' }, images: [], results: [] });
     (api.listLibrary as any).mockResolvedValue([]);
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -194,6 +202,33 @@ describe('Img2ImgPage SDK Integration', () => {
             }),
           ]),
         );
+    });
+  });
+
+  it('opens SDK modal in readOnly mode when view button is clicked', async () => {
+    (api.getNode as any).mockResolvedValue({ 
+      node: { id: 'test-node', prompt: 'test prompt' }, 
+      images: [{ id: 'img-1', file_path: '/test.png' }], 
+      results: [{ id: 'r-1', image_id: 'img-1' }] 
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/?node_id=test-node']}>
+        <Img2ImgPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('view-prompt-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('view-prompt-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('prompt-editor-sdk-modal')).toBeInTheDocument();
+      expect(screen.getByTestId('sdk-readonly-mode')).toBeInTheDocument();
+      expect(screen.queryByTestId('sdk-save-btn')).not.toBeInTheDocument();
+      expect(screen.getByText('Close')).toBeInTheDocument();
     });
   });
 });

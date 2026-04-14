@@ -27,7 +27,7 @@ vi.mock('../../lib/api', () => ({
 }));
 
 // Mock SDK with correct PromptCollectionState structure
-vi.mock('prompt-editor-sdk', () => ({
+vi.mock('@xgfan/prompt-editor', () => ({
   PromptEditorSDK: ({ onSave, onCancel, value }: any) => (
     <div data-testid="prompt-editor-sdk-modal">
       <button 
@@ -75,15 +75,16 @@ describe('Txt2ImgPage UI', () => {
     expect(screen.getByLabelText(/image size/i)).toBeInTheDocument();
   });
 
-  it('toggles between Re-roll and Generate buttons based on dirty state', async () => {
+  it('always shows Generate button but handles branching based on dirty state', async () => {
     render(
       <MemoryRouter>
         <Txt2ImgPage />
       </MemoryRouter>
     );
 
-    expect(screen.getByTestId('reroll')).toBeInTheDocument();
-    expect(screen.queryByTestId('generate')).not.toBeInTheDocument();
+    const generateBtn = screen.getByTestId('generate');
+    expect(generateBtn).toBeInTheDocument();
+    expect(generateBtn).toHaveTextContent('Generate');
 
     // Open SDK
     fireEvent.click(screen.getByTestId('edit-prompt-btn'));
@@ -101,18 +102,18 @@ describe('Txt2ImgPage UI', () => {
         expect(screen.queryByTestId('prompt-editor-sdk-modal')).not.toBeInTheDocument();
     });
 
-    // Now prompt should be 'new prompt', which is different from baseline (empty)
     await waitFor(() => {
-        expect(screen.getByTestId('generate')).toBeInTheDocument();
-        expect(screen.queryByTestId('reroll')).not.toBeInTheDocument();
+        const btn = screen.getByTestId('generate');
+        expect(btn).toBeInTheDocument();
+        expect(btn).toHaveTextContent('Generate');
     });
   });
 
   it('switches URL node_id to new node after generate from historical node', async () => {
     (api.getNode as any).mockResolvedValue({
       node: { id: 'node-old', prompt: 'old prompt', aspect_ratio: '1:1' },
-      images: [],
-      results: [],
+      images: [{ id: 'img-1', file_path: '/old.png' }],
+      results: [{ id: 'r-1', image_id: 'img-1' }],
     });
     (api.generate as any).mockResolvedValue({
       node: { id: 'node-new', prompt: 'new prompt' },
@@ -131,8 +132,7 @@ describe('Txt2ImgPage UI', () => {
       expect(api.getNode).toHaveBeenCalledWith('node-old');
     });
 
-    // Open SDK and change prompt
-    fireEvent.click(screen.getByTestId('edit-prompt-btn'));
+    fireEvent.click(screen.getByTestId('fork-prompt-btn'));
     
     await waitFor(() => {
         expect(screen.getByTestId('prompt-editor-sdk-modal')).toBeInTheDocument();
@@ -180,7 +180,7 @@ describe('Txt2ImgPage UI', () => {
     // Initial load sets baseline = prompt = 'old prompt'.
     // So 'reroll' button should be visible.
     
-    fireEvent.click(screen.getByTestId('reroll'));
+    fireEvent.click(screen.getByTestId('generate'));
 
     await waitFor(() => {
       expect(api.reroll).toHaveBeenCalledWith('node-old', {
@@ -206,6 +206,66 @@ describe('Txt2ImgPage UI', () => {
       expect(screen.getByTestId('location-search')).toHaveTextContent('');
       expect(screen.queryByTestId('generate-error')).not.toBeInTheDocument();
       expect(api.getNode).not.toHaveBeenCalled();
+    });
+  });
+
+  it('automatically opens PromptEditor modal when action=new is in URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/?action=new']}>
+        <Txt2ImgPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('prompt-editor-sdk-modal')).toBeInTheDocument();
+    });
+  });
+
+  it('handles fork flow correctly: prefill, open modal, and maintain parent semantics', async () => {
+    (api.getNode as any).mockResolvedValue({
+      node: { id: 'source-id', prompt: 'source prompt', aspect_ratio: '1:1' },
+      images: [{ id: 'img-1', file_path: '/src.png' }],
+      results: [{ id: 'r-1', image_id: 'img-1' }],
+    });
+    (api.generate as any).mockResolvedValue({
+      node: { id: 'forked-id', prompt: 'forked prompt' },
+      images: [],
+      results: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/?node_id=source-id']}>
+        <LocationProbe />
+        <Txt2ImgPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(api.getNode).toHaveBeenCalledWith('source-id');
+    });
+
+    fireEvent.click(screen.getByTestId('fork-prompt-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('prompt-editor-sdk-modal')).toBeInTheDocument();
+      const search = screen.getByTestId('location-search').textContent;
+      expect(search).not.toContain('action=fork');
+      expect(search).not.toContain('node_id=source-id');
+    });
+
+    fireEvent.click(screen.getByText('Save SDK'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('prompt-editor-sdk-modal')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('generate'));
+
+    await waitFor(() => {
+      expect(api.generate).toHaveBeenCalledWith(expect.objectContaining({ 
+        parent_node_id: 'source-id',
+        prompt: 'new prompt' 
+      }));
     });
   });
 });

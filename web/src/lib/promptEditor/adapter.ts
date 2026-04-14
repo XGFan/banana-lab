@@ -1,6 +1,6 @@
 import type { PromptFragment, PromptSnippet } from '../api';
 import type { PromptCollectionState, PromptItem } from './types';
-import type { PromptEditorValue, PromptEditorLibrary } from 'prompt-editor-sdk';
+import type { PromptEditorValue, PromptEditorLibrary } from '@xgfan/prompt-editor';
 
 export type PromptEditorInitState = {
   value: PromptEditorValue;
@@ -78,7 +78,7 @@ function fragmentsToText(contentFragments: unknown): string {
   return contentFragments
     .map((f) => (isRecord(f) && typeof f.text === 'string' ? f.text : ''))
     .filter((text) => text.trim().length > 0)
-    .join(', ');
+    .join('\n');
 }
 
 export function emptyCollectionState(): PromptCollectionState {
@@ -141,7 +141,7 @@ export function collectionToPlainPrompt(state: PromptCollectionState): string {
     }
   });
 
-  return parts.join(', ');
+  return parts.join('\n');
 }
 
 export function normalizeLegacyFragmentsToCollection(fragments: PromptFragment[]): PromptCollectionState {
@@ -235,7 +235,7 @@ export function snippetsFromLibrary(library: PromptEditorLibrary): PromptSnippet
       });
     }
     
-    const joinedContent = contentParts.join(', ');
+    const joinedContent = contentParts.join('\n');
     const hasContent = joinedContent.trim().length > 0;
 
     const snippet: PromptSnippet = {

@@ -250,8 +250,9 @@ export function Sidebar() {
 
       <div className="p-3 shrink-0">
         <button
+          type="button"
           data-testid="new-node-btn"
-          onClick={() => navigate(`/${mode}`)}
+          onClick={() => navigate(`/${mode}?action=new`)}
           className="w-full flex items-center justify-center gap-2 bg-white text-slate-900 border border-slate-200 hover:bg-slate-50 text-sm font-medium py-2.5 px-4 rounded-lg transition-colors shadow-sm active:scale-[0.98]"
         >
           <PlusIcon className="w-4 h-4" />
@@ -312,6 +313,7 @@ function TabLink({ to, testId, icon, label }: { to: string; testId: string; icon
 function TextIcon({ className }: { className?: string }) {
   return (
     <svg className={className} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <title>Text Icon</title>
       <path d="M17 6.1H3" />
       <path d="M21 12.1H3" />
       <path d="M15.1 18H3" />
@@ -322,6 +324,7 @@ function TextIcon({ className }: { className?: string }) {
 function ImageIcon({ className }: { className?: string }) {
   return (
     <svg className={className} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <title>Image Icon</title>
       <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
       <circle cx="9" cy="9" r="2" />
       <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
@@ -332,6 +335,7 @@ function ImageIcon({ className }: { className?: string }) {
 function PlusIcon({ className }: { className?: string }) {
   return (
     <svg className={className} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <title>Plus Icon</title>
       <path d="M12 5v14" />
       <path d="M5 12h14" />
     </svg>

@@ -41,7 +41,7 @@ export function PromptNode({ data }: NodeProps<AppNode>) {
               <span className="text-xs text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">Archived</span>
             )}
           </div>
-          <p className="mt-1 text-xs text-slate-500 line-clamp-2 font-mono break-all" title={node.prompt}>
+          <p className="mt-1 text-xs text-slate-500 line-clamp-2 whitespace-pre-line font-mono break-words" title={node.prompt}>
             {node.prompt}
           </p>
           <button

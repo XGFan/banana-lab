@@ -10,6 +10,6 @@ describe('App', () => {
       </MemoryRouter>
     )
     expect(screen.getByTestId('app-shell')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '文生图' })).toBeInTheDocument()
+    expect(screen.getByTestId('tab-txt2img')).toBeInTheDocument()
   })
 })

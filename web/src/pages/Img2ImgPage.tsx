@@ -7,13 +7,22 @@ import { buildImg2ImgPayload } from '../lib/generatePayload';
 import { imageSizes, aspectRatios } from '../lib/imagePresets';
 import { ImagePreviewModal } from '../components/ImagePreviewModal';
 import { generateButtonClass } from '../lib/buttonStyles';
-import { PromptEditorSDK, type PromptEditorValue, type PromptEditorSDKHandle, type PromptEditorLibrary } from 'prompt-editor-sdk';
-import 'prompt-editor-sdk/style.css';
+import { PromptEditorSDK, type PromptEditorValue, type PromptEditorSDKHandle, type PromptEditorLibrary } from '@xgfan/prompt-editor';
+import '@xgfan/prompt-editor/style.css';
 import { toSdkValue, collectionToPlainPrompt, collectionFromPlainPrompt, snippetsFromLibrary, libraryFromSnippets } from '../lib/promptEditor/adapter';
 import type { PromptCollectionState } from '../lib/promptEditor/types';
 
+const EMPTY_COLLECTION: PromptCollectionState = {
+  groupOrder: [],
+  groups: {},
+  prompts: {},
+  version: 1,
+};
+
 export function Img2ImgPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const skipNextClearRef = useRef(false);
+  const lastHandledActionRef = useRef<string | null>(null);
   const [prompt, setPrompt] = useState('');
   const [fragments, setFragments] = useState<PromptCollectionState | PromptFragment[]>([]);
   const [baselinePrompt, setBaselinePrompt] = useState('');
@@ -30,12 +39,10 @@ export function Img2ImgPage() {
   const [showDeleteNodeModal, setShowDeleteNodeModal] = useState(false);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isReadOnly, setIsReadOnly] = useState(false);
   const [sdkValue, setSdkValue] = useState<PromptEditorValue | null>(null);
   const [sdkLibrary, setSdkLibrary] = useState<PromptEditorLibrary>(libraryFromSnippets([]));
   const [saveError, setSaveError] = useState<string | null>(null);
-  const sdkRef = useRef<PromptEditorSDKHandle>(null);
-  const librarySnippetsRef = useRef<PromptSnippet[]>([]);
-  const librarySyncQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryImages, setLibraryImages] = useState<Image[]>([]);
@@ -49,12 +56,15 @@ export function Img2ImgPage() {
   });
   const [librarySelectedId, setLibrarySelectedId] = useState<string | null>(null);
 
+  const sdkRef = useRef<PromptEditorSDKHandle>(null);
+  const librarySnippetsRef = useRef<PromptSnippet[]>([]);
+  const librarySyncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const clearSelectedNode = useCallback(() => {
     setCurrentNodeId(null);
     setPrompt('');
-    setFragments([]);
+    setFragments(EMPTY_COLLECTION);
     setBaselinePrompt('');
     setAspectRatio('1:1');
     setImageSize('1K');
@@ -63,8 +73,89 @@ export function Img2ImgPage() {
     setSourceImages([]);
   }, []);
 
+  const handleOpenEditor = useCallback(async (options?: { initialPrompt?: string; initialFragments?: any; readOnly?: boolean }) => {
+    const openWith = (snippets: PromptSnippet[]) => {
+      librarySnippetsRef.current = snippets;
+      const p = options?.initialPrompt !== undefined ? options.initialPrompt : prompt;
+      const f = options?.initialFragments !== undefined ? options.initialFragments : fragments;
+      const initialValue = toSdkValue(p, f, snippets);
+      setSdkValue(initialValue.value);
+      setSdkLibrary(initialValue.library);
+      setSaveError(null);
+      setIsReadOnly(!!options?.readOnly);
+      setIsModalOpen(true);
+    };
+    try {
+      openWith(await api.listPromptSnippets());
+    } catch (err) {
+      console.error('Failed to load library:', err);
+      setError('Failed to load snippet library');
+      openWith([]);
+    }
+  }, [prompt, fragments]);
+
+  const handleFork = useCallback(() => {
+    if (!currentNodeId) return;
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('action', 'fork');
+      next.set('sourceNodeId', currentNodeId);
+      next.set('sourcePrompt', prompt);
+      return next;
+    });
+  }, [currentNodeId, prompt, setSearchParams]);
+
   useEffect(() => {
+    const action = searchParams.get('action');
+    if (!action) {
+      lastHandledActionRef.current = null;
+      return;
+    }
+
+    if (action === lastHandledActionRef.current) return;
+    lastHandledActionRef.current = action;
+
+    if (action === 'new') {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('action');
+        return next;
+      }, { replace: true });
+      clearSelectedNode();
+      void handleOpenEditor({ initialPrompt: '', initialFragments: EMPTY_COLLECTION });
+    } else if (action === 'fork') {
+      const sourceNodeId = searchParams.get('sourceNodeId');
+      const sourcePrompt = searchParams.get('sourcePrompt');
+      
+      if (sourceNodeId && sourcePrompt) {
+        skipNextClearRef.current = true;
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('action');
+          next.delete('sourceNodeId');
+          next.delete('sourcePrompt');
+          next.delete('node_id');
+          return next;
+        }, { replace: true });
+        
+        setPrompt(sourcePrompt);
+        const forkFragments = collectionFromPlainPrompt(sourcePrompt);
+        setFragments(forkFragments);
+        setCurrentNodeId(sourceNodeId);
+        setBaselinePrompt('');
+        setGeneratedImages([]);
+        setResults([]);
+
+        void handleOpenEditor({ initialPrompt: sourcePrompt, initialFragments: forkFragments });
+      }
+    }
+  }, [searchParams, setSearchParams, handleOpenEditor, clearSelectedNode]);
+
+  useEffect(() => {
+    const action = searchParams.get('action');
     const nid = searchParams.get('node_id');
+
+    if (action) return;
 
     const restoreImages = async (ids: string[]) => {
       if (!ids || ids.length === 0) return;
@@ -118,31 +209,13 @@ export function Img2ImgPage() {
         setError('Failed to restore node state');
       });
     } else {
-      clearSelectedNode();
+      if (skipNextClearRef.current) {
+        skipNextClearRef.current = false;
+      } else {
+        clearSelectedNode();
+      }
     }
-  }, [searchParams, setSearchParams]);
-
-  useEffect(() => {
-    if (libraryOpen) {
-      setLibraryLoading(true);
-      setLibraryImages([]);
-      setLibraryPage(1);
-      setLibraryHasMore(true);
-      
-      api.listLibrary({
-        page: 1,
-        limit: 60,
-        type: libraryFilters.type === 'all' ? undefined : libraryFilters.type,
-        date: libraryFilters.date === 'all' ? undefined : libraryFilters.date,
-      })
-        .then(imgs => {
-          setLibraryImages(imgs);
-          setLibraryHasMore(imgs.length === 60);
-        })
-        .catch(() => setError('Failed to load library'))
-        .finally(() => setLibraryLoading(false));
-    }
-  }, [libraryOpen, libraryFilters.type, libraryFilters.date]);
+  }, [searchParams, setSearchParams, clearSelectedNode]);
 
   const handleLoadMore = () => {
     if (libraryLoading || !libraryHasMore) return;
@@ -246,20 +319,6 @@ export function Img2ImgPage() {
     }
   };
 
-  const filteredLibraryImages = libraryImages.filter(img => {
-    if (!libraryFilters.query) return true;
-    const q = libraryFilters.query.toLowerCase();
-    return img.id.toLowerCase().includes(q) || img.file_path.toLowerCase().includes(q);
-  });
-
-  const getGridCols = () => {
-      const count = sourceImages.length + 1;
-      if (count === 1) return 'grid-cols-1';
-      if (sourceImages.length === 1) return 'grid-cols-2';
-      if (sourceImages.length >= 4) return 'grid-cols-3';
-      return 'grid-cols-2';
-  };
-
   const handleDeleteResult = async (resultId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!window.confirm('Are you sure you want to delete this result?')) return;
@@ -290,27 +349,41 @@ export function Img2ImgPage() {
     }
   };
 
-  const handleOpenEditor = async () => {
-    try {
-      const snippets = await api.listPromptSnippets();
-      librarySnippetsRef.current = snippets;
-      const initialValue = toSdkValue(prompt, fragments, snippets);
-      setSdkValue(initialValue.value);
-      setSdkLibrary(initialValue.library);
-      setSaveError(null);
-      setIsModalOpen(true);
-    } catch (err) {
-      console.error('Failed to load library:', err);
-      setError('Failed to load snippet library');
-      // Fallback: open without library
-      const initialValue = toSdkValue(prompt, fragments, []);
-      librarySnippetsRef.current = [];
-      setSdkValue(initialValue.value);
-      setSdkLibrary(initialValue.library);
-      setSaveError(null);
-      setIsModalOpen(true);
-    }
+  const filteredLibraryImages = libraryImages.filter(img => {
+    if (!libraryFilters.query) return true;
+    const q = libraryFilters.query.toLowerCase();
+    return img.id.toLowerCase().includes(q) || img.file_path.toLowerCase().includes(q);
+  });
+
+  const getGridCols = () => {
+      const count = sourceImages.length + 1;
+      if (count === 1) return 'grid-cols-1';
+      if (sourceImages.length === 1) return 'grid-cols-2';
+      if (sourceImages.length >= 4) return 'grid-cols-3';
+      return 'grid-cols-2';
   };
+
+  useEffect(() => {
+    if (libraryOpen) {
+      setLibraryLoading(true);
+      setLibraryImages([]);
+      setLibraryPage(1);
+      setLibraryHasMore(true);
+      
+      api.listLibrary({
+        page: 1,
+        limit: 60,
+        type: libraryFilters.type === 'all' ? undefined : libraryFilters.type,
+        date: libraryFilters.date === 'all' ? undefined : libraryFilters.date,
+      })
+        .then(imgs => {
+          setLibraryImages(imgs);
+          setLibraryHasMore(imgs.length === 60);
+        })
+        .catch(() => setError('Failed to load library'))
+        .finally(() => setLibraryLoading(false));
+    }
+  }, [libraryOpen, libraryFilters.type, libraryFilters.date]);
 
   const handleLibraryChange = async (nextLibrary: PromptEditorLibrary) => {
     setSdkLibrary(nextLibrary);
@@ -347,12 +420,21 @@ export function Img2ImgPage() {
       }
   };
 
-  const handleSdkSave = (finalFragments: PromptCollectionState) => {
-      const nextCollection = finalFragments;
-      const nextPrompt = collectionToPlainPrompt(nextCollection);
-      
-      setPrompt(nextPrompt);
-      setFragments(nextCollection);
+  // SDK onSave actually passes { fragments, promptText } at runtime,
+  // but its type declaration still says PromptCollectionState — accept both shapes.
+  const handleSdkSave = (saveResult: unknown) => {
+      const data = saveResult as Record<string, unknown>;
+      if (data && typeof data === 'object' && 'promptText' in data && 'fragments' in data) {
+          const promptText = data.promptText as string;
+          const nextCollection = data.fragments as PromptCollectionState;
+          setPrompt(promptText);
+          setFragments(nextCollection);
+      } else {
+          const nextCollection = saveResult as PromptCollectionState;
+          const nextPrompt = collectionToPlainPrompt(nextCollection);
+          setPrompt(nextPrompt);
+          setFragments(nextCollection);
+      }
       setIsModalOpen(false);
   };
 
@@ -401,6 +483,7 @@ export function Img2ImgPage() {
                 onLibraryChange={handleLibraryChange}
                 onSave={handleSdkSave}
                 onCancel={() => setIsModalOpen(false)}
+                readOnly={isReadOnly}
               />
              <div className="p-4 border-t border-slate-200 flex justify-between items-center gap-2 bg-slate-50">
                 <div className="flex-1 text-sm text-red-600 font-medium px-2">
@@ -408,18 +491,22 @@ export function Img2ImgPage() {
                 </div>
                 <div className="flex gap-2">
                     <button
+                        type="button"
                         onClick={() => setIsModalOpen(false)}
                         className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
                     >
-                        Cancel
+                        {isReadOnly ? 'Close' : 'Cancel'}
                     </button>
-                    <button
-                        data-testid="sdk-save-btn"
-                        onClick={handleSaveClick}
-                        className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-sm"
-                    >
-                        Save Changes
-                    </button>
+                    {!isReadOnly && (
+                        <button
+                            type="button"
+                            data-testid="sdk-save-btn"
+                            onClick={handleSaveClick}
+                            className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-sm"
+                        >
+                            Save Changes
+                        </button>
+                    )}
                 </div>
                 {import.meta.env.VITE_E2E === '1' && (
                     <div className="absolute bottom-4 left-4 flex gap-2">
@@ -430,6 +517,7 @@ export function Img2ImgPage() {
                             onChange={(e) => handleE2eApply(e.target.value)}
                         />
                         <button
+                            type="button"
                             data-testid="e2e-sdk-apply"
                             className="bg-gray-200 px-2 py-1 text-xs rounded"
                             onClick={() => {}} 
@@ -625,17 +713,53 @@ export function Img2ImgPage() {
                     className="flex-1 w-full bg-white border border-slate-200 rounded-lg p-5 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent min-h-[160px] resize-none text-lg leading-relaxed shadow-sm cursor-default"
                     placeholder="Describe how you want to transform the reference image..."
                   />
-                  <button 
-                    type="button"
-                    data-testid="edit-prompt-btn"
-                    onClick={handleOpenEditor}
-                    className="absolute top-2 right-2 p-1.5 bg-white/80 hover:bg-white text-slate-500 hover:text-indigo-600 rounded-md shadow-sm border border-slate-200 transition-all opacity-0 group-hover/prompt:opacity-100 [@media(hover:none)]:opacity-100 backdrop-blur-sm"
-                    title="Open Prompt Editor"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4" aria-hidden="true">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
-                    </svg>
-                  </button>
+                   <div className="absolute top-2 right-2 flex gap-1 transition-all opacity-0 group-hover/prompt:opacity-100 [@media(hover:none)]:opacity-100">
+                    {currentNodeId && generatedImages.length > 0 && (
+                       <button 
+                         type="button"
+                         data-testid="view-prompt-btn"
+                         onClick={() => handleOpenEditor({ readOnly: true })}
+                         className="p-1.5 bg-white/80 hover:bg-white text-slate-500 hover:text-indigo-600 rounded-md shadow-sm border border-slate-200 backdrop-blur-sm transition-colors"
+                         title="View Prompt Details"
+                         disabled={isGenerating}
+                       >
+                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4" aria-hidden="true">
+                             <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.644C3.412 9.143 6.82 6.5 11.25 6.5s7.838 2.643 9.214 5.178c.154.283.154.628 0 .911-1.376 2.535-4.782 5.178-9.214 5.178s-7.838-2.643-9.214-5.178ZM11.25 10.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z" />
+                         </svg>
+                       </button>
+                     )}
+                     {currentNodeId && generatedImages.length > 0 && (
+                       <button 
+                         type="button"
+                         data-testid="fork-prompt-btn"
+                         onClick={handleFork}
+                         className="p-1.5 bg-white/80 hover:bg-white text-slate-500 hover:text-indigo-600 rounded-md shadow-sm border border-slate-200 backdrop-blur-sm transition-colors"
+                         title="Fork Prompt"
+                         disabled={isGenerating}
+                       >
+                           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4" aria-hidden="true">
+                               <circle cx="7.5" cy="5.25" r="2.25" />
+                               <circle cx="7.5" cy="18.75" r="2.25" />
+                               <circle cx="16.5" cy="5.25" r="2.25" />
+                               <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 7.5v9M16.5 7.5v3a3 3 0 0 1-3 3h-6" />
+                          </svg>
+                       </button>
+                     )}
+                     {generatedImages.length === 0 && (
+                     <button 
+                       type="button"
+                       data-testid="edit-prompt-btn"
+                       onClick={() => handleOpenEditor()}
+                       className="p-1.5 bg-white/80 hover:bg-white text-slate-500 hover:text-indigo-600 rounded-md shadow-sm border border-slate-200 backdrop-blur-sm transition-colors"
+                       title="Open Prompt Editor"
+                       disabled={isGenerating}
+                     >
+                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4" aria-hidden="true">
+                           <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                       </svg>
+                     </button>
+                     )}
+                   </div>
                 </div>
               </div>
 
@@ -670,12 +794,13 @@ export function Img2ImgPage() {
                 
                 <div className="pt-2">
                 <button 
+                  type="button"
                   data-testid="generate"
                   onClick={handleGenerate}
                   disabled={isGenerating}
                   className={`w-full py-4 px-6 rounded-lg text-lg tracking-wide ${generateButtonClass} ${isGenerating ? 'cursor-not-allowed text-slate-400' : ''}`}
                 >
-                  {isGenerating ? 'Generating...' : (!isDirty && currentNodeId ? 'Re-roll' : 'Generate & Fork')}
+                  {isGenerating ? 'Generating...' : 'Generate'}
                 </button>
                 </div>
               </div>
