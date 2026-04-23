@@ -57,3 +57,27 @@ describe('getDimensions', () => {
     expect(() => getDimensions('1K', '10:1')).toThrow('Unsupported aspect ratio')
   })
 })
+
+describe('getDimensions gpt-image-2 presets', () => {
+  it('gpt-image-2 1:1 1K → 1024x1024', () => {
+    expect(getDimensions('gpt-image-2', '1K', '1:1')).toEqual({ width: 1024, height: 1024 })
+  })
+
+  it('gpt-image-2 3:2 1K → 1536x1024', () => {
+    expect(getDimensions('gpt-image-2', '1K', '3:2')).toEqual({ width: 1536, height: 1024 })
+  })
+
+  it('gpt-image-2 2:3 1K → 1024x1536', () => {
+    expect(getDimensions('gpt-image-2', '1K', '2:3')).toEqual({ width: 1024, height: 1536 })
+  })
+
+  it('gemini 3:2 1K → 1264x848 (gemini table still honored)', () => {
+    expect(getDimensions('gemini-3-pro-image', '1K', '3:2')).toEqual({ width: 1264, height: 848 })
+  })
+
+  it('unknown model falls back to gemini dims', () => {
+    const result = getDimensions('some-unknown-model', '1K', '3:2')
+    // Unknown model → fallback to gemini: 1264x848
+    expect(result).toEqual({ width: 1264, height: 848 })
+  })
+})

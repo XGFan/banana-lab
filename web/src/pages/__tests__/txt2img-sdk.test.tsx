@@ -20,6 +20,7 @@ vi.mock('../../lib/api', () => ({
     getArchive: vi.fn(),
     listPrompts: vi.fn(),
   },
+  getModels: vi.fn().mockResolvedValue([]),
   imageUrl: (img: any) => img?.file_path || '',
 }));
 

@@ -8,18 +8,21 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 
+	"banana-lab/internal/config"
 	"banana-lab/internal/model"
 	"banana-lab/internal/service"
 )
 
 type GenerateHandler struct {
-	Service *service.GenerateService
+	Service  *service.GenerateService
+	Registry config.Registry
 }
 
 type generateRequest struct {
 	ParentNodeID      *string                     `json:"parent_node_id"`
 	Mode              string                      `json:"mode" binding:"required"`
 	Prompt            string                      `json:"prompt" binding:"required"`
+	Model             string                      `json:"model" binding:"required"`
 	Fragments         model.PromptCollectionState `json:"fragments"`
 	NegativePrompt    *string                     `json:"negative_prompt"`
 	CfgScale          *float64                    `json:"cfg_scale"`
@@ -30,15 +33,6 @@ type generateRequest struct {
 	ReferenceImageIDs []string                    `json:"reference_image_ids"`
 	Width             int                         `json:"width" binding:"required"`
 	Height            int                         `json:"height" binding:"required"`
-}
-
-func isValidImageSize(size string) bool {
-	switch size {
-	case "1K", "2K", "4K":
-		return true
-	default:
-		return false
-	}
 }
 
 func isValidPromptCollectionState(state model.PromptCollectionState) bool {
@@ -164,9 +158,9 @@ func isValidTimestampLike(value any) bool {
 }
 
 type rerollRequest struct {
-	RequestID   *string `json:"request_id"`
 	AspectRatio *string `json:"aspect_ratio"`
 	ImageSize   *string `json:"image_size"`
+	Model       *string `json:"model"`
 }
 
 func nodeNotFoundResponse(c *gin.Context) {
@@ -191,11 +185,16 @@ func (h *GenerateHandler) Handle(c *gin.Context) {
 	}
 	req.Mode = strings.TrimSpace(req.Mode)
 	req.Prompt = strings.TrimSpace(req.Prompt)
+	req.Model = strings.TrimSpace(req.Model)
 	if req.Mode != model.PromptModeTxt2Img && req.Mode != model.PromptModeImg2Img {
 		c.JSON(400, gin.H{"error": "invalid"})
 		return
 	}
 	if req.Prompt == "" {
+		c.JSON(400, gin.H{"error": "invalid"})
+		return
+	}
+	if req.Model == "" {
 		c.JSON(400, gin.H{"error": "invalid"})
 		return
 	}
@@ -209,13 +208,26 @@ func (h *GenerateHandler) Handle(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "invalid"})
 		return
 	}
+	sizeForValidation := ""
 	if req.ImageSize != nil {
 		trimmedImageSize := strings.TrimSpace(*req.ImageSize)
-		if trimmedImageSize == "" || !isValidImageSize(trimmedImageSize) {
+		if trimmedImageSize == "" {
 			c.JSON(400, gin.H{"error": "invalid"})
 			return
 		}
 		req.ImageSize = &trimmedImageSize
+		sizeForValidation = trimmedImageSize
+	}
+	ratioForValidation := ""
+	if req.AspectRatio != nil {
+		trimmedAspectRatio := strings.TrimSpace(*req.AspectRatio)
+		if trimmedAspectRatio != "" {
+			ratioForValidation = trimmedAspectRatio
+		}
+	}
+	if code, ok := h.Registry.IsValid(req.Model, sizeForValidation, ratioForValidation); !ok {
+		c.JSON(400, gin.H{"error": code})
+		return
 	}
 	if len(req.ReferenceImageIDs) > 5 {
 		c.JSON(400, gin.H{"error": "invalid"})
@@ -230,6 +242,7 @@ func (h *GenerateHandler) Handle(c *gin.Context) {
 		Mode:              req.Mode,
 		ParentNodeID:      req.ParentNodeID,
 		Prompt:            req.Prompt,
+		Model:             req.Model,
 		Fragments:         req.Fragments,
 		NegativePrompt:    req.NegativePrompt,
 		CfgScale:          req.CfgScale,
@@ -269,7 +282,7 @@ func (h *GenerateHandler) Reroll(c *gin.Context) {
 		return
 	}
 	for key := range raw {
-		if key != "request_id" && key != "aspect_ratio" && key != "image_size" {
+		if key != "aspect_ratio" && key != "image_size" && key != "model" {
 			c.JSON(400, gin.H{"error": "invalid"})
 			return
 		}
@@ -290,11 +303,42 @@ func (h *GenerateHandler) Reroll(c *gin.Context) {
 	}
 	if req.ImageSize != nil {
 		trimmedImageSize := strings.TrimSpace(*req.ImageSize)
-		if trimmedImageSize == "" || !isValidImageSize(trimmedImageSize) {
+		if trimmedImageSize == "" {
 			c.JSON(400, gin.H{"error": "invalid"})
 			return
 		}
 		req.ImageSize = &trimmedImageSize
+	}
+	if req.Model != nil {
+		trimmedModel := strings.TrimSpace(*req.Model)
+		if trimmedModel == "" {
+			c.JSON(400, gin.H{"error": "invalid"})
+			return
+		}
+		req.Model = &trimmedModel
+	}
+
+	// Validate size/ratio against the applicable model (override if present, else skip registry validation).
+	if req.Model != nil {
+		sizeForValidation := ""
+		ratioForValidation := ""
+		if req.ImageSize != nil {
+			sizeForValidation = *req.ImageSize
+		}
+		if req.AspectRatio != nil {
+			ratioForValidation = *req.AspectRatio
+		}
+		if code, ok := h.Registry.IsValid(*req.Model, sizeForValidation, ratioForValidation); !ok {
+			c.JSON(400, gin.H{"error": code})
+			return
+		}
+	} else {
+		// No model override: still validate size against currently-allowed sizes across registry if a size was provided.
+		// To preserve "invalid size" rejection semantics, verify size is a known size (any model) when provided.
+		if req.ImageSize != nil && !h.Registry.IsKnownSize(*req.ImageSize) {
+			c.JSON(400, gin.H{"error": "invalid"})
+			return
+		}
 	}
 
 	nodeID := strings.TrimSpace(c.Param("id"))
@@ -307,7 +351,7 @@ func (h *GenerateHandler) Reroll(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.Service.HandleReroll(c.Request.Context(), nodeID, req.AspectRatio, req.ImageSize)
+	resp, err := h.Service.HandleReroll(c.Request.Context(), nodeID, req.AspectRatio, req.ImageSize, req.Model)
 	if err != nil {
 		if errors.Is(err, service.ErrBusy) {
 			c.JSON(429, gin.H{"error": "busy"})

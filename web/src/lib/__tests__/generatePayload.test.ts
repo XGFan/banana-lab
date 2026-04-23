@@ -97,3 +97,61 @@ describe('buildImg2ImgPayload', () => {
     expect(payload.prompt).toBe('transform')
   })
 })
+
+describe('buildTxt2ImgPayload model routing', () => {
+  it('carries gpt-image-2 model through and uses its preset dims', () => {
+    const payload = buildTxt2ImgPayload({
+      model: 'gpt-image-2',
+      prompt: 'x',
+      aspectRatio: '1:1',
+      imageSize: '1K',
+    })
+
+    expect(payload.model).toBe('gpt-image-2')
+    expect(payload.width).toBe(1024)
+    expect(payload.height).toBe(1024)
+  })
+
+  it('uses gpt-image-2 3:2 dims (diverges from gemini)', () => {
+    const payload = buildTxt2ImgPayload({
+      model: 'gpt-image-2',
+      prompt: 'x',
+      aspectRatio: '3:2',
+      imageSize: '1K',
+    })
+
+    expect(payload.model).toBe('gpt-image-2')
+    // gpt-image-2 1K 3:2 → 1536x1024; gemini would be 1264x848
+    expect(payload.width).toBe(1536)
+    expect(payload.height).toBe(1024)
+  })
+
+  it('uses gemini dims when model=gemini-3-pro-image', () => {
+    const payload = buildTxt2ImgPayload({
+      model: 'gemini-3-pro-image',
+      prompt: 'x',
+      aspectRatio: '3:2',
+      imageSize: '1K',
+    })
+
+    expect(payload.model).toBe('gemini-3-pro-image')
+    expect(payload.width).toBe(1264)
+    expect(payload.height).toBe(848)
+  })
+})
+
+describe('buildImg2ImgPayload model routing', () => {
+  it('carries gpt-image-2 model through and uses its preset dims', () => {
+    const payload = buildImg2ImgPayload({
+      model: 'gpt-image-2',
+      prompt: 'x',
+      referenceImageIds: ['img-1'],
+      aspectRatio: '3:2',
+      imageSize: '1K',
+    })
+
+    expect(payload.model).toBe('gpt-image-2')
+    expect(payload.width).toBe(1536)
+    expect(payload.height).toBe(1024)
+  })
+})

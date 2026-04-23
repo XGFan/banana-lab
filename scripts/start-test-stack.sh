@@ -38,7 +38,6 @@ echo "[test-stack] starting backend on :${BACKEND_PORT}"
 SERVER_PORT="${BACKEND_PORT}" \
 PROXY_BASE_URL="http://127.0.0.1:${MOCK_PORT}" \
 PROXY_AUTH_HEADER_VALUE="mock" \
-MODEL_ID="mock" \
 STORAGE_ROOT="./storage-e2e" \
 DB_PATH="./storage-e2e/banana-lab.db" \
 go run ./cmd/server >"${BACKEND_LOG}" 2>&1 &

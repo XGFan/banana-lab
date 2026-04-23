@@ -138,14 +138,31 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	imageURL := fmt.Sprintf("%s/mock-images/%s", strings.TrimRight(baseURL, "/"), imageFile)
 
-	resp := proxyResponse{
-		Choices: []proxyChoice{{
-			Message: proxyMessageResponse{
-				Images: []proxyImageObject{
-					{ImageURL: proxyImageURL{URL: imageURL}},
+	// Dispatch on model: gemini-3-pro-image uses Content with data-URL; gpt-image-* and others use Images[] array
+	var resp proxyResponse
+	if strings.HasPrefix(req.Model, "gemini-") || req.Model == "gemini-3-pro-image" {
+		// Gemini: embed data URL in Content
+		contentJSON, _ := json.Marshal(map[string]string{
+			"text": fmt.Sprintf("Generated image: %s", imageURL),
+		})
+		resp = proxyResponse{
+			Choices: []proxyChoice{{
+				Message: proxyMessageResponse{
+					Content: contentJSON,
 				},
-			},
-		}},
+			}},
+		}
+	} else {
+		// gpt-image-* and default: use Images[] array
+		resp = proxyResponse{
+			Choices: []proxyChoice{{
+				Message: proxyMessageResponse{
+					Images: []proxyImageObject{
+						{ImageURL: proxyImageURL{URL: imageURL}},
+					},
+				},
+			}},
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -14,17 +14,14 @@ test('evidence generate empty prompt', async ({ page }) => {
   await page.goto('/txt2img');
   await expect(page).not.toHaveURL(/node_id=/);
 
-  const prompt = page.getByTestId('prompt');
-  
-  const rerollBtn = page.getByTestId('reroll');
-  await expect(rerollBtn).toBeDisabled();
+  const generateBtn = page.getByTestId('generate');
+  await expect(generateBtn).toBeDisabled();
 
   await setPromptViaSdkModal(page, 'test prompt');
-  const generateBtn = page.getByTestId('generate');
   await expect(generateBtn).toBeEnabled();
 
-  await setPromptViaSdkModal(page, '   '); 
-  await expect(rerollBtn).toBeDisabled();
+  await setPromptViaSdkModal(page, '   ');
+  await expect(generateBtn).toBeDisabled();
 
 
   await expect(page).not.toHaveURL(/node_id=/);

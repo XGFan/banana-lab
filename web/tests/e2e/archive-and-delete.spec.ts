@@ -76,6 +76,7 @@ async function generateNode(
       mode: input.mode,
       parent_node_id: input.parentNodeId,
       prompt: input.prompt,
+      model: 'gpt-image-2',
       width: 1024,
       height: 1024,
       reference_image_ids: input.referenceImageIds ?? [],

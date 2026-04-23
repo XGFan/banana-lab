@@ -78,11 +78,12 @@ test.describe('Sidebar', () => {
 
     await page.getByTestId(`sidebar-item-${nodeAId}`).click();
     await expect(page).toHaveURL(new RegExp(`node_id=${nodeAId}`));
-    await expect(page.getByTestId('prompt')).toHaveValue('Node A');
-    
+    // SDK editor may prepend a group header (e.g. "##Default\n"); match containment.
+    await expect(page.getByTestId('prompt')).toHaveValue(/Node A/);
+
     await page.getByTestId(`sidebar-item-${nodeBId}`).click();
     await expect(page).toHaveURL(new RegExp(`node_id=${nodeBId}`));
-    await expect(page.getByTestId('prompt')).toHaveValue('Node B');
+    await expect(page.getByTestId('prompt')).toHaveValue(/Node B/);
   });
 
   test('menu actions: rename', async ({ page }) => {

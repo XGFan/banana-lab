@@ -33,7 +33,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "pids=$(lsof -ti tcp:18080 || true); if [ -n \"$pids\" ]; then kill -9 $pids; fi; npm --prefix web run build && BANANA_FORCE_RESET_DB=1 SERVER_PORT=18080 PROXY_BASE_URL=http://127.0.0.1:18081 PROXY_AUTH_HEADER_VALUE=mock MODEL_ID=mock STORAGE_ROOT=./storage-e2e DB_PATH=./storage-e2e/banana-lab.db go run ./cmd/server",
+      command: "pids=$(lsof -ti tcp:18080 || true); if [ -n \"$pids\" ]; then kill -9 $pids; fi; npm --prefix web run build && BANANA_FORCE_RESET_DB=1 SERVER_PORT=18080 PROXY_BASE_URL=http://127.0.0.1:18081 PROXY_AUTH_HEADER_VALUE=mock STORAGE_ROOT=./storage-e2e DB_PATH=./storage-e2e/banana-lab.db go run ./cmd/server",
       cwd: repoRoot,
       url: "http://127.0.0.1:18080/api/health",
       reuseExistingServer: !process.env.CI,

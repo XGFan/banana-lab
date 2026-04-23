@@ -44,12 +44,31 @@ func Open(dbPath string) (*gorm.DB, error) {
 	return db, nil
 }
 
+func ensureModelIDColumn(db *gorm.DB) error {
+	migrator := db.Migrator()
+	if !migrator.HasTable(&PromptNode{}) {
+		return nil
+	}
+	if migrator.HasColumn(&PromptNode{}, "model_id") {
+		return nil
+	}
+	return db.Exec("ALTER TABLE prompt_nodes ADD COLUMN model_id TEXT NOT NULL DEFAULT ''").Error
+}
+
 func Migrate(db *gorm.DB) error {
 	if err := beforeResultsCutoverHook(db); err != nil {
 		return err
 	}
 
-	return db.AutoMigrate(&PromptNode{}, &PromptSnippet{}, &Asset{}, &Result{}, &Image{})
+	if err := ensureModelIDColumn(db); err != nil {
+		return err
+	}
+
+	if err := db.AutoMigrate(&PromptNode{}, &PromptSnippet{}, &Asset{}, &Result{}, &Image{}); err != nil {
+		return err
+	}
+
+	return db.Exec("UPDATE prompt_nodes SET model_id = 'gemini-3-pro-image' WHERE model_id = '' OR model_id IS NULL").Error
 }
 
 func IsTruthyFlag(raw string) bool {

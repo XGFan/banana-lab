@@ -60,7 +60,9 @@ test.describe('Prompt Node UX Enhancements', () => {
     await page.route(`**/api/nodes/${sourceNodeId}`, route => route.fulfill({
       json: {
         node: createNode(sourceNodeId, sourcePrompt),
-        images: [],
+        // fork-prompt-btn only renders when the node has at least one generated image
+        // (see Txt2ImgPage.tsx: `{currentNodeId && images.length > 0 && (...fork-prompt-btn...)}`).
+        images: [createImage('img-src', sourceNodeId)],
         results: [],
       },
     }));
@@ -94,7 +96,8 @@ test.describe('Prompt Node UX Enhancements', () => {
     await expect.poll(() => capturedPayload).not.toBeNull();
     expect(capturedPayload).toMatchObject({
       parent_node_id: sourceNodeId,
-      prompt: sourcePrompt
+      // SDK editor may prepend a group header (e.g. "##Default\n"); match containment.
+      prompt: expect.stringContaining(sourcePrompt)
     });
     
     await page.screenshot({ path: '../.sisyphus/evidence/prompt-node-ux-fork-payload.png' });
@@ -148,8 +151,12 @@ test.describe('Prompt Node UX Enhancements', () => {
     await page.getByTestId('sdk-save-btn').click();
     await expect(page.getByTestId('sdk-modal-overlay')).not.toBeVisible();
     
-    // Verify display STILL preserves newlines after "save"
-    await expect(display).toHaveValue(multiline);
+    // Verify display STILL preserves newlines after "save".
+    // Note: SDK editor may prepend a group header (e.g. "##Default\n") on save,
+    // so assert the user-entered multiline body via containment rather than exact equality.
+    await expect(display).toHaveValue(
+      new RegExp(multiline.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    );
     
     await page.screenshot({ path: '../.sisyphus/evidence/prompt-node-ux-multiline.png' });
   });

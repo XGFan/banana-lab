@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../lib/api';
-import type { ApiError, Image, Result, PromptFragment, PromptSnippet } from '../lib/api';
+import { api, getModels } from '../lib/api';
+import type { ApiError, Image, ModelInfo, Result, PromptFragment, PromptSnippet } from '../lib/api';
 import { imageUrl } from '../lib/imageUrl';
 import { buildTxt2ImgPayload } from '../lib/generatePayload';
 import { imageSizes, aspectRatios } from '../lib/imagePresets';
+import { ModelSelect } from '../components/ModelSelect';
 import { ImagePreviewModal } from '../components/ImagePreviewModal';
 import { generateButtonClass } from '../lib/buttonStyles';
 import { PromptEditorSDK, type PromptEditorValue, type PromptEditorSDKHandle, type PromptEditorLibrary } from '@xgfan/prompt-editor';
@@ -38,6 +39,8 @@ export function Txt2ImgPage() {
   const [stepsText, setStepsText] = useState('');
   const [aspectRatio, setAspectRatio] = useState('1:1');
   const [imageSize, setImageSize] = useState('1K');
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('');
   const isDirty = prompt.trim() !== baselinePrompt.trim();
   
   const [rerollCount, setRerollCount] = useState('1');
@@ -71,6 +74,27 @@ export function Txt2ImgPage() {
   }, []);
 
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getModels().then((ms) => {
+      setModels(ms);
+      if (ms.length > 0) setSelectedModel(ms[0].id);
+    }).catch(() => {
+      // silently ignore — UI degrades gracefully with empty model list
+    });
+  }, []);
+
+  const handleModelChange = (next: string) => {
+    setSelectedModel(next);
+    const picked = models.find((m) => m.id === next);
+    if (!picked) return;
+    if (!picked.allowed_sizes.includes(imageSize)) {
+      setImageSize(picked.default_size);
+    }
+    if (!picked.allowed_aspect_ratios.includes(aspectRatio)) {
+      setAspectRatio(picked.allowed_aspect_ratios[0]);
+    }
+  };
 
   const handleOpenEditor = useCallback(async (options?: { initialPrompt?: string; initialFragments?: any; readOnly?: boolean }) => {
     const openWith = (snippets: PromptSnippet[]) => {
@@ -248,6 +272,7 @@ export function Txt2ImgPage() {
               stepsText,
               aspectRatio,
               imageSize,
+              model: selectedModel,
             }));
 
         setImages(res.images);
@@ -273,7 +298,7 @@ export function Txt2ImgPage() {
       setIsLooping(false);
       setLoopProgress({ current: 0, total: 0 });
     }
-  }, [currentNodeId, prompt, fragments, negativePrompt, cfgScaleText, stepsText, aspectRatio, imageSize, loading, isLooping, rerollCount, setSearchParams]);
+  }, [currentNodeId, prompt, fragments, negativePrompt, cfgScaleText, stepsText, aspectRatio, imageSize, selectedModel, loading, isLooping, rerollCount, setSearchParams]);
 
   const handleStop = () => {
     stopLoopRef.current = true;
@@ -604,29 +629,40 @@ export function Txt2ImgPage() {
 
                  <div className="flex flex-col justify-between gap-6">
                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                        {models.length > 0 && (
+                          <div className="flex flex-col gap-1">
+                            <label htmlFor="model-select" className="text-xs font-semibold text-slate-500">Model</label>
+                            <ModelSelect
+                              value={selectedModel}
+                              onChange={handleModelChange}
+                              models={models}
+                            />
+                          </div>
+                        )}
+
                         <div className="flex flex-col gap-1">
                             <label htmlFor="image-size" className="text-xs font-semibold text-slate-500">Image Size</label>
-                            <select 
-                                id="image-size" 
+                            <select
+                                id="image-size"
                                 className="bg-white border border-slate-200 rounded px-3 py-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none text-slate-900 shadow-sm"
                                 value={imageSize}
                                 onChange={(e) => setImageSize(e.target.value)}
                                 disabled={loading || isLooping}
                             >
-                                {imageSizes.map(s => <option key={s} value={s}>{s}</option>)}
+                                {(models.find(m => m.id === selectedModel)?.allowed_sizes ?? imageSizes).map(s => <option key={s} value={s}>{s}</option>)}
                             </select>
                         </div>
-                        
+
                         <div className="flex flex-col gap-1">
                             <label htmlFor="aspect-ratio" className="text-xs font-semibold text-slate-500">Aspect Ratio</label>
-                            <select 
-                                id="aspect-ratio" 
+                            <select
+                                id="aspect-ratio"
                                 className="bg-white border border-slate-200 rounded px-3 py-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none text-slate-900 shadow-sm"
                                 value={aspectRatio}
                                 onChange={(e) => setAspectRatio(e.target.value)}
                                 disabled={loading || isLooping}
                             >
-                                {aspectRatios.map(r => <option key={r} value={r}>{r}</option>)}
+                                {(models.find(m => m.id === selectedModel)?.allowed_aspect_ratios ?? aspectRatios).map(r => <option key={r} value={r}>{r}</option>)}
                             </select>
                         </div>
 

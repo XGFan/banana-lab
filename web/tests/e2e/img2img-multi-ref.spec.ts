@@ -136,10 +136,12 @@ test('img2img multi ref upload, delete, limit, payload, and preview', async ({ p
   ];
 
   expect(capturedBody).toMatchObject({
-    prompt: 'transform',
+    // SDK editor may prepend a group header (e.g. "##Default\n"); match containment.
+    prompt: expect.stringContaining('transform'),
     aspect_ratio: '16:9',
-    width: 2752,
-    height: 1536,
+    // Default model is gpt-image-2; its 2K 16:9 preset is 3584x2048.
+    width: 3584,
+    height: 2048,
     reference_image_ids: expectedReferenceIds,
   });
 

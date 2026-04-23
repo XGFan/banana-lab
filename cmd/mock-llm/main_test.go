@@ -111,6 +111,72 @@ func TestChatCompletions(t *testing.T) {
 			t.Errorf("expected status 200, got %d", w.Code)
 		}
 	})
+
+	t.Run("TestChatCompletions_gptImage2_returnsImagesArray", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(`{"model":"gpt-image-2","messages":[{"role":"user","content":[{"type":"text","text":"generate image"}]}]}`))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", w.Code)
+		}
+
+		var resp struct {
+			Choices []struct {
+				Message struct {
+					Images []struct {
+						ImageURL struct {
+							URL string `json:"url"`
+						} `json:"image_url"`
+					} `json:"images"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if len(resp.Choices) == 0 || len(resp.Choices[0].Message.Images) == 0 {
+			t.Fatal("response should contain at least one image in images[] array")
+		}
+
+		imgURL := resp.Choices[0].Message.Images[0].ImageURL.URL
+		if !strings.Contains(imgURL, "/mock-images/") {
+			t.Errorf("expected image URL to contain /mock-images/, got %s", imgURL)
+		}
+	})
+
+	t.Run("TestChatCompletions_gemini_returnsContentFormat", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(`{"model":"gemini-3-pro-image","messages":[{"role":"user","content":[{"type":"text","text":"generate image"}]}]}`))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", w.Code)
+		}
+
+		var resp struct {
+			Choices []struct {
+				Message struct {
+					Content json.RawMessage `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if len(resp.Choices) == 0 || len(resp.Choices[0].Message.Content) == 0 {
+			t.Fatal("response should contain content field")
+		}
+
+		contentStr := string(resp.Choices[0].Message.Content)
+		if !strings.Contains(contentStr, "/mock-images/") {
+			t.Errorf("expected content to contain /mock-images/, got %s", contentStr)
+		}
+	})
 }
 
 func TestMockImages(t *testing.T) {

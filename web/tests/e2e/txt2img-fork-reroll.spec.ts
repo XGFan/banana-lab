@@ -100,19 +100,19 @@ test('reroll stop halts looping and images stay under count', async ({ page }) =
   
   await expect(page.getByTestId('result-grid').locator('img').first()).toBeVisible({ timeout: 10000 });
   
-  const rerollBtn = page.getByTestId('reroll');
-  await expect(rerollBtn).toBeVisible();
-  await expect(rerollBtn).toBeEnabled();
+  const generateBtn = page.getByTestId('generate');
+  await expect(generateBtn).toBeVisible();
+  await expect(generateBtn).toBeEnabled();
 
   await page.getByTestId('reroll-count').fill('5');
-  await rerollBtn.click();
+  await generateBtn.click();
 
   const stopButton = page.getByTestId('stop-reroll');
   await expect(stopButton).toBeVisible();
   await stopButton.click();
   releaseFirst?.();
 
-  await expect(page.getByTestId('reroll')).toBeVisible();
+  await expect(page.getByTestId('generate')).toBeVisible();
   await expect.poll(() => generateCount).toBeLessThan(6);
 });
 
@@ -180,14 +180,18 @@ test('generate request includes size and ratio dimensions', async ({ page }) => 
   await expect.poll(() => capturedBody, { timeout: 5000 }).not.toBeNull();
 
   expect(capturedBody).toMatchObject({
-    prompt: 'a cute cat',
+    // SDK editor serializes prompts with an optional group header (e.g. "##Default\n")
+    // before the user text; match containment rather than exact equality.
+    prompt: expect.stringContaining('a cute cat'),
     negative_prompt: 'dog, bird',
     cfg_scale: 8.5,
     steps: 30,
     aspect_ratio: '16:9',
-    width: 2752,
-    height: 1536,
+    // Default model is gpt-image-2 (first enabled in config.yaml); its 2K 16:9 preset is 3584x2048.
+    width: 3584,
+    height: 2048,
     reference_image_ids: [],
+    model: 'gpt-image-2',
   });
 });
 
@@ -196,14 +200,18 @@ test('empty prompt and reroll disabled', async ({ page }) => {
 
   await setPromptViaSdkModal(page, '');
   
-  const reroll = page.getByTestId('reroll');
-  await expect(reroll).toBeDisabled();
-  
+  const generateBtn = page.getByTestId('generate');
+  await expect(generateBtn).toBeDisabled();
+
   const url = new URL(page.url());
   expect(url.searchParams.has('node_id')).toBeFalsy();
 });
 
-test('buttons toggle based on dirty state', async ({ page }) => {
+test('reroll-count input toggles off when prompt becomes dirty', async ({ page }) => {
+  // Under the unified "Generate" button, the button itself is always named "generate"
+  // and its action (fork vs reroll) depends on whether the prompt is dirty. The visible
+  // toggle is the reroll-count input: shown when a node is loaded AND the prompt is
+  // clean (matches the node), hidden once the user starts editing.
   const nodeId = 'node-toggle';
   await page.route('**/api/nodes/*', async (route) => {
     await route.fulfill({
@@ -215,18 +223,16 @@ test('buttons toggle based on dirty state', async ({ page }) => {
   });
 
   await page.goto(`/txt2img?node_id=${nodeId}`);
-  
-  await expect(page.getByTestId('reroll')).toBeVisible();
-  await expect(page.getByTestId('generate')).toBeHidden();
-  
-  await setPromptViaSdkModal(page, 'dirty');
-  
+
+  // clean + node loaded → reroll-count visible, generate button always visible
   await expect(page.getByTestId('generate')).toBeVisible();
-  await expect(page.getByTestId('reroll')).toBeHidden();
-  
-  await setPromptViaSdkModal(page, 'initial prompt');
-  await expect(page.getByTestId('reroll')).toBeVisible();
-  await expect(page.getByTestId('generate')).toBeHidden();
+  await expect(page.getByTestId('reroll-count')).toBeVisible();
+
+  await setPromptViaSdkModal(page, 'dirty');
+
+  // dirty → reroll-count hidden, generate still visible
+  await expect(page.getByTestId('generate')).toBeVisible();
+  await expect(page.getByTestId('reroll-count')).toBeHidden();
 });
 
 test('historical reroll keeps node_id and remains consistent after refresh', async ({ page }) => {
@@ -262,7 +268,7 @@ test('historical reroll keeps node_id and remains consistent after refresh', asy
   await expect(page.getByTestId('result-grid').locator('img')).toHaveCount(2);
   await expect(page).toHaveURL(new RegExp(`node_id=${oldNodeId}`));
 
-  await page.getByTestId('reroll').click();
+  await page.getByTestId('generate').click();
 
   await expect(page.getByTestId('result-grid').locator('img')).toHaveCount(1);
   await expect(page).toHaveURL(new RegExp(`node_id=${oldNodeId}`));
@@ -329,7 +335,9 @@ test('historical Generate & Fork updates node_id and remains on new node after r
   await expect.poll(() => capturedGenerateBody).not.toBeNull();
   expect(capturedGenerateBody).toMatchObject({
     parent_node_id: oldNodeId,
-    prompt: newPrompt,
+    // SDK editor serializes prompts with an optional group header (e.g. "##Default\n");
+    // match containment rather than exact equality.
+    prompt: expect.stringContaining(newPrompt),
   });
 
   await expect(page.getByTestId('result-grid').locator('img').first()).toBeVisible();

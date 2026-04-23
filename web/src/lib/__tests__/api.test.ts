@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../api'
+import { api, getModels } from '../api'
 
 describe('prompt snippet api client', () => {
   afterEach(() => {
@@ -84,6 +84,45 @@ describe('prompt snippet api client', () => {
     await expect(api.deletePromptSnippet('missing-id')).rejects.toMatchObject({
       status: 404,
       code: 'not_found',
+    })
+  })
+})
+
+describe('getModels', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('fetches /api/models and returns the models array', async () => {
+    const mockModels = [
+      { id: 'gpt-image-2', label: 'GPT Image 2', allowed_sizes: ['1K', '2K'], allowed_aspect_ratios: ['1:1', '3:2'], default_size: '1K' },
+      { id: 'gemini-3-pro-image', label: 'Gemini 3 Pro Image', allowed_sizes: ['1K', '2K', '4K'], allowed_aspect_ratios: ['1:1', '3:2', '21:9'], default_size: '1K' },
+    ]
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ models: mockModels }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    const result = await getModels()
+
+    expect(result).toEqual(mockModels)
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/models', expect.any(Object))
+  })
+
+  it('surfaces API errors when fetch returns error status', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: 'internal' }), {
+        status: 500,
+        statusText: 'Internal Server Error',
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    await expect(getModels()).rejects.toMatchObject({
+      status: 500,
     })
   })
 })

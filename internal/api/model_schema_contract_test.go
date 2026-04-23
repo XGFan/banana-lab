@@ -27,7 +27,7 @@ func setupNodesRouter(t *testing.T) (*gin.Engine, *model.Node, *model.Asset, *mo
 	}
 
 	now := mustParseRFC3339(t, "2026-02-08T00:00:00Z")
-	node := model.PromptNode{ID: "node-contract", Mode: model.PromptModeTxt2Img, Prompt: "p", Title: "p", LastUsedAt: now}
+	node := model.PromptNode{ID: "node-contract", Mode: model.PromptModeTxt2Img, Prompt: "p", ModelID: "gemini-3-pro-image", Title: "p", LastUsedAt: now}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("create node: %v", err)
 	}
@@ -136,6 +136,9 @@ func TestSchemaResultsAssetsMigrationContract(t *testing.T) {
 	if !migrator.HasColumn(&model.PromptNode{}, "reference_image_ids") {
 		t.Fatalf("missing column: prompt_nodes.reference_image_ids")
 	}
+	if !migrator.HasColumn(&model.PromptNode{}, "model_id") {
+		t.Fatalf("missing column: prompt_nodes.model_id")
+	}
 	if migrator.HasColumn(&model.PromptNode{}, "root_node_id") {
 		t.Fatalf("unexpected legacy column: prompt_nodes.root_node_id")
 	}
@@ -161,7 +164,7 @@ func TestModelResultDefaultStatusContract(t *testing.T) {
 	}
 
 	now := mustParseRFC3339(t, "2026-02-08T00:00:01Z")
-	node := model.PromptNode{ID: "node-model", Mode: model.PromptModeTxt2Img, Prompt: "prompt", Title: "prompt", LastUsedAt: now}
+	node := model.PromptNode{ID: "node-model", Mode: model.PromptModeTxt2Img, Prompt: "prompt", ModelID: "gemini-3-pro-image", Title: "prompt", LastUsedAt: now}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("create node: %v", err)
 	}
@@ -221,6 +224,13 @@ func TestContractNodesResponseIncludesResults(t *testing.T) {
 	}
 	if payload["results"] == nil {
 		t.Fatalf("expected results in response")
+	}
+	nodeJSON, ok := payload["node"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected node payload: %#v", payload["node"])
+	}
+	if _, ok := nodeJSON["model_id"]; !ok {
+		t.Fatalf("expected node.model_id to be present in JSON response: %#v", nodeJSON)
 	}
 	results, ok := payload["results"].([]any)
 	if !ok || len(results) != 1 {

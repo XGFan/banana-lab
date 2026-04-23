@@ -33,13 +33,13 @@ type GenerateService struct {
 	Storage storage.Storage
 	Proxy   *ProxyClient
 	Limiter *ConcurrencyLimiter
-	ModelID string
 }
 
 type GenerateRequest struct {
 	Mode              string
 	ParentNodeID      *string
 	Prompt            string
+	Model             string
 	Fragments         model.PromptCollectionState
 	NegativePrompt    *string
 	CfgScale          *float64
@@ -89,6 +89,10 @@ func (s *GenerateService) HandleGenerate(ctx context.Context, req GenerateReques
 	if prompt == "" {
 		return GenerateResponse{}, errors.New("prompt is empty")
 	}
+	reqModel := strings.TrimSpace(req.Model)
+	if reqModel == "" {
+		return GenerateResponse{}, errors.New("model is empty")
+	}
 
 	release, ok := s.Limiter.TryAcquire()
 	if !ok {
@@ -126,6 +130,7 @@ func (s *GenerateService) HandleGenerate(ctx context.Context, req GenerateReques
 		ParentID:          parentID,
 		Mode:              mode,
 		Prompt:            prompt,
+		ModelID:           reqModel,
 		Fragments:         req.Fragments.Clone(),
 		Title:             prompt,
 		LastUsedAt:        now,
@@ -166,12 +171,11 @@ func (s *GenerateService) HandleGenerate(ctx context.Context, req GenerateReques
 		sourceDomain = srcDomain
 	}
 
-	modelID := strings.TrimSpace(s.ModelID)
-	if modelID == "" {
+	if strings.TrimSpace(targetNode.ModelID) == "" {
 		return GenerateResponse{}, errors.New("model id is empty")
 	}
 
-	proxyImages, err := s.Proxy.Generate(ctx, modelID, targetNode.Prompt, targetNode.AspectRatio, targetNode.ImageSize, sourceImageDataURL)
+	proxyImages, err := s.Proxy.Generate(ctx, targetNode.ModelID, targetNode.Prompt, targetNode.AspectRatio, targetNode.ImageSize, sourceImageDataURL)
 	if err != nil {
 		return GenerateResponse{}, err
 	}
@@ -270,7 +274,7 @@ func (s *GenerateService) HandleGenerate(ctx context.Context, req GenerateReques
 	}, nil
 }
 
-func (s *GenerateService) HandleReroll(ctx context.Context, nodeID string, aspectRatio *string, imageSize *string) (GenerateResponse, error) {
+func (s *GenerateService) HandleReroll(ctx context.Context, nodeID string, aspectRatio *string, imageSize *string, modelOverride *string) (GenerateResponse, error) {
 	if s == nil {
 		return GenerateResponse{}, errors.New("generate service is nil")
 	}
@@ -324,6 +328,14 @@ func (s *GenerateService) HandleReroll(ctx context.Context, nodeID string, aspec
 			targetNode.ImageSize = &trimmedImageSize
 		}
 	}
+	modelOverridden := false
+	if modelOverride != nil {
+		trimmedModel := strings.TrimSpace(*modelOverride)
+		if trimmedModel != "" {
+			targetNode.ModelID = trimmedModel
+			modelOverridden = true
+		}
+	}
 
 	var sourceImageDataURL *string
 	var sourceAssetID *string
@@ -338,12 +350,11 @@ func (s *GenerateService) HandleReroll(ctx context.Context, nodeID string, aspec
 		sourceDomain = srcDomain
 	}
 
-	modelID := strings.TrimSpace(s.ModelID)
-	if modelID == "" {
+	if strings.TrimSpace(targetNode.ModelID) == "" {
 		return GenerateResponse{}, errors.New("model id is empty")
 	}
 
-	proxyImages, err := s.Proxy.Generate(ctx, modelID, targetNode.Prompt, targetNode.AspectRatio, targetNode.ImageSize, sourceImageDataURL)
+	proxyImages, err := s.Proxy.Generate(ctx, targetNode.ModelID, targetNode.Prompt, targetNode.AspectRatio, targetNode.ImageSize, sourceImageDataURL)
 	if err != nil {
 		return GenerateResponse{}, err
 	}
@@ -358,6 +369,9 @@ func (s *GenerateService) HandleReroll(ctx context.Context, nodeID string, aspec
 		}
 		if imageSize != nil {
 			nodeUpdates["image_size"] = targetNode.ImageSize
+		}
+		if modelOverridden {
+			nodeUpdates["model_id"] = targetNode.ModelID
 		}
 		nodeUpdate := tx.Model(&model.Node{}).Where("id = ? AND deleted_at IS NULL", targetNode.ID).Updates(nodeUpdates)
 		if nodeUpdate.Error != nil {

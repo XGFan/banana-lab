@@ -239,6 +239,187 @@ func TestIsTruthyFlag(t *testing.T) {
 	}
 }
 
+func TestMigrate_emptyDB_addsModelIDColumn(t *testing.T) {
+	dbPath := t.TempDir() + "/modelid_empty.sqlite"
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if !db.Migrator().HasColumn(&PromptNode{}, "model_id") {
+		t.Fatal("expected model_id column to exist after Migrate")
+	}
+}
+
+func TestMigrate_backfillLegacyRows(t *testing.T) {
+	dbPath := t.TempDir() + "/modelid_backfill.sqlite"
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatalf("first migrate: %v", err)
+	}
+
+	// Insert a row with empty model_id via raw SQL.
+	if err := db.Exec("INSERT INTO prompt_nodes (id, mode, prompt, title, last_used_at, pinned, model_id) VALUES (?, ?, ?, ?, datetime('now'), 0, '')",
+		"backfill-1", PromptModeTxt2Img, "test prompt", "test title").Error; err != nil {
+		t.Fatalf("insert row: %v", err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+
+	var node PromptNode
+	if err := db.First(&node, "id = ?", "backfill-1").Error; err != nil {
+		t.Fatalf("query node: %v", err)
+	}
+	if node.ModelID != "gemini-3-pro-image" {
+		t.Fatalf("expected model_id='gemini-3-pro-image', got %q", node.ModelID)
+	}
+}
+
+func TestMigrate_isIdempotent(t *testing.T) {
+	dbPath := t.TempDir() + "/modelid_idempotent.sqlite"
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := Migrate(db); err != nil {
+			t.Fatalf("migrate run %d: %v", i+1, err)
+		}
+	}
+
+	if !db.Migrator().HasColumn(&PromptNode{}, "model_id") {
+		t.Fatal("expected model_id column to exist after 3 Migrate calls")
+	}
+
+	// Insert a row and run once more; verify model_id stays stable.
+	if err := db.Exec("INSERT INTO prompt_nodes (id, mode, prompt, title, last_used_at, pinned, model_id) VALUES (?, ?, ?, ?, datetime('now'), 0, 'gemini-3-pro-image')",
+		"idem-1", PromptModeTxt2Img, "prompt", "title").Error; err != nil {
+		t.Fatalf("insert row: %v", err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate run 4: %v", err)
+	}
+
+	var node PromptNode
+	if err := db.First(&node, "id = ?", "idem-1").Error; err != nil {
+		t.Fatalf("query node: %v", err)
+	}
+	if node.ModelID != "gemini-3-pro-image" {
+		t.Fatalf("expected model_id unchanged, got %q", node.ModelID)
+	}
+}
+
+func TestMigrate_altersPopulatedTableWithNotNullDefault(t *testing.T) {
+	dbPath := t.TempDir() + "/modelid_alter.sqlite"
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	// Create pre-migration schema WITHOUT model_id column.
+	createSQL := `CREATE TABLE prompt_nodes (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT,
+		mode TEXT NOT NULL,
+		prompt TEXT NOT NULL,
+		fragments TEXT,
+		title TEXT NOT NULL,
+		pinned INTEGER NOT NULL DEFAULT 0,
+		sort_order INTEGER,
+		last_used_at DATETIME NOT NULL,
+		archived_at DATETIME,
+		negative_prompt TEXT,
+		cfg_scale REAL,
+		aspect_ratio TEXT,
+		image_size TEXT,
+		seed INTEGER,
+		steps INTEGER,
+		reference_image_ids TEXT,
+		created_at DATETIME,
+		updated_at DATETIME,
+		deleted_at DATETIME
+	)`
+	if err := db.Exec(createSQL).Error; err != nil {
+		t.Fatalf("create pre-migration table: %v", err)
+	}
+
+	// Insert a row with all required NOT NULL fields.
+	if err := db.Exec("INSERT INTO prompt_nodes (id, mode, prompt, title, last_used_at, pinned) VALUES (?, ?, ?, ?, datetime('now'), 0)",
+		"alter-1", PromptModeTxt2Img, "test prompt", "test title").Error; err != nil {
+		t.Fatalf("insert pre-migration row: %v", err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	if !db.Migrator().HasColumn(&PromptNode{}, "model_id") {
+		t.Fatal("expected model_id column to exist after Migrate")
+	}
+
+	var node PromptNode
+	if err := db.First(&node, "id = ?", "alter-1").Error; err != nil {
+		t.Fatalf("query node: %v", err)
+	}
+	if node.ModelID != "gemini-3-pro-image" {
+		t.Fatalf("expected model_id='gemini-3-pro-image', got %q", node.ModelID)
+	}
+}
+
+func TestEnsureLegacySchemaGuard_modelIDColumnMissing_isNotLegacy(t *testing.T) {
+	dbPath := t.TempDir() + "/modelid_guard.sqlite"
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	// Create all current tables but without model_id column in prompt_nodes.
+	createPromptNodesSQL := `CREATE TABLE prompt_nodes (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT,
+		mode TEXT NOT NULL,
+		prompt TEXT NOT NULL,
+		fragments TEXT,
+		title TEXT NOT NULL,
+		pinned INTEGER NOT NULL DEFAULT 0,
+		sort_order INTEGER,
+		last_used_at DATETIME NOT NULL,
+		archived_at DATETIME,
+		negative_prompt TEXT,
+		cfg_scale REAL,
+		aspect_ratio TEXT,
+		image_size TEXT,
+		seed INTEGER,
+		steps INTEGER,
+		reference_image_ids TEXT,
+		created_at DATETIME,
+		updated_at DATETIME,
+		deleted_at DATETIME
+	)`
+	if err := db.Exec(createPromptNodesSQL).Error; err != nil {
+		t.Fatalf("create prompt_nodes: %v", err)
+	}
+	if err := db.Exec("CREATE TABLE assets (id TEXT PRIMARY KEY, domain TEXT NOT NULL, origin TEXT NOT NULL, file_path TEXT NOT NULL, created_at DATETIME, updated_at DATETIME)").Error; err != nil {
+		t.Fatalf("create assets: %v", err)
+	}
+	if err := db.Exec("CREATE TABLE results (id TEXT PRIMARY KEY, node_id TEXT NOT NULL, asset_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at DATETIME, updated_at DATETIME)").Error; err != nil {
+		t.Fatalf("create results: %v", err)
+	}
+
+	// Guard should NOT trigger — presence of prompt_nodes+assets+results is the non-legacy signal.
+	if err := EnsureLegacySchemaGuard(db, false); err != nil {
+		t.Fatalf("expected guard to pass when tables exist but model_id column is missing, got: %v", err)
+	}
+}
+
 func mustOpenLegacySchemaDB(t *testing.T) *gorm.DB {
 	t.Helper()
 

@@ -1,24 +1,88 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"banana-lab/internal/config"
 	"banana-lab/internal/model"
 	"banana-lab/internal/service"
 	"banana-lab/internal/storage"
 )
 
+// testRegistry builds the registry used by every GenerateHandler test.
+// Keep in sync with the registry documented in Group 4 of the ralplan.
+func testRegistry() config.Registry {
+	return config.NewRegistry([]config.Model{
+		{
+			ID:                  "gemini-3-pro-image",
+			Label:               "Gemini",
+			Enabled:             true,
+			AllowedSizes:        []string{"1K", "2K", "4K"},
+			AllowedAspectRatios: []string{"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"},
+			DefaultSize:         "1K",
+		},
+		{
+			ID:                  "gpt-image-2",
+			Label:               "GPT Image 2",
+			Enabled:             true,
+			AllowedSizes:        []string{"1K", "2K"},
+			AllowedAspectRatios: []string{"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9"},
+			DefaultSize:         "1K",
+		},
+		{
+			ID:                  "disabled-model",
+			Label:               "Disabled",
+			Enabled:             false,
+			AllowedSizes:        []string{"1K"},
+			AllowedAspectRatios: []string{"1:1"},
+			DefaultSize:         "1K",
+		},
+	})
+}
+
+// proxyRequestRecorder captures request bodies sent to the upstream proxy
+// so tests can assert the model field reaches the wire.
+type proxyRequestRecorder struct {
+	mu    sync.Mutex
+	bodies [][]byte
+}
+
+func (r *proxyRequestRecorder) record(body []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bodies = append(r.bodies, append([]byte(nil), body...))
+}
+
+func (r *proxyRequestRecorder) last() map[string]any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.bodies) == 0 {
+		return nil
+	}
+	var out map[string]any
+	_ = json.Unmarshal(r.bodies[len(r.bodies)-1], &out)
+	return out
+}
+
 func setupGenerateRouter(t *testing.T) (*gin.Engine, *gorm.DB, string) {
+	router, db, storageRoot, _ := setupGenerateRouterWithRecorder(t)
+	return router, db, storageRoot
+}
+
+func setupGenerateRouterWithRecorder(t *testing.T) (*gin.Engine, *gorm.DB, string, *proxyRequestRecorder) {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
@@ -32,7 +96,12 @@ func setupGenerateRouter(t *testing.T) (*gin.Engine, *gorm.DB, string) {
 		t.Fatalf("migrate db: %v", err)
 	}
 
+	recorder := &proxyRequestRecorder{}
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorder.record(body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
@@ -53,18 +122,20 @@ func setupGenerateRouter(t *testing.T) (*gin.Engine, *gorm.DB, string) {
 	t.Cleanup(server.Close)
 
 	storageRoot := t.TempDir()
-	handler := &GenerateHandler{Service: &service.GenerateService{
-		DB:      db,
-		Storage: storage.Storage{Root: storageRoot},
-		Proxy:   &service.ProxyClient{BaseURL: server.URL},
-		Limiter: service.NewConcurrencyLimiter(1),
-		ModelID: "model-1",
-	}}
+	handler := &GenerateHandler{
+		Service: &service.GenerateService{
+			DB:      db,
+			Storage: storage.Storage{Root: storageRoot},
+			Proxy:   &service.ProxyClient{BaseURL: server.URL},
+			Limiter: service.NewConcurrencyLimiter(1),
+		},
+		Registry: testRegistry(),
+	}
 
 	router := gin.New()
 	router.POST("/api/generate", handler.Handle)
 	router.POST("/api/prompts/:id/reroll", handler.Reroll)
-	return router, db, storageRoot
+	return router, db, storageRoot, recorder
 }
 
 func TestGenerateReferenceImages(t *testing.T) {
@@ -74,6 +145,7 @@ func TestGenerateReferenceImages(t *testing.T) {
 		recorder := performJSONRequest(t, router, http.MethodPost, "/api/generate", map[string]any{
 			"mode":                model.PromptModeTxt2Img,
 			"prompt":              "hello",
+			"model":               "gemini-3-pro-image",
 			"width":               512,
 			"height":              512,
 			"reference_image_ids": []string{},
@@ -102,6 +174,7 @@ func TestGenerateReferenceImages(t *testing.T) {
 		recorder := performJSONRequest(t, router, http.MethodPost, "/api/generate", map[string]any{
 			"mode":            model.PromptModeTxt2Img,
 			"prompt":          "hello",
+			"model":           "gemini-3-pro-image",
 			"width":           512,
 			"height":          512,
 			"source_image_id": "legacy-1",
@@ -116,6 +189,7 @@ func TestGenerateReferenceImages(t *testing.T) {
 		recorder := performJSONRequest(t, router, http.MethodPost, "/api/generate", map[string]any{
 			"mode":                model.PromptModeTxt2Img,
 			"prompt":              "hello",
+			"model":               "gemini-3-pro-image",
 			"width":               512,
 			"height":              512,
 			"reference_image_ids": []string{"1", "2", "3", "4", "5", "6"},
@@ -183,6 +257,7 @@ func TestGenerateImg2ImgReferenceDecouple(t *testing.T) {
 	recorder := performJSONRequest(t, router, http.MethodPost, "/api/generate", map[string]any{
 		"mode":                model.PromptModeImg2Img,
 		"prompt":              "hello",
+		"model":               "gemini-3-pro-image",
 		"width":               512,
 		"height":              512,
 		"reference_image_ids": []string{sourceAsset.ID},
@@ -268,6 +343,7 @@ func TestGenerateImg2ImgReferenceCopyFailureNoHalfState(t *testing.T) {
 	recorder := performJSONRequest(t, router, http.MethodPost, "/api/generate", map[string]any{
 		"mode":                model.PromptModeImg2Img,
 		"prompt":              "hello",
+		"model":               "gemini-3-pro-image",
 		"width":               512,
 		"height":              512,
 		"reference_image_ids": []string{brokenAsset.ID},
@@ -306,6 +382,7 @@ func TestRerollContract(t *testing.T) {
 	createRec := performJSONRequest(t, router, http.MethodPost, "/api/generate", map[string]any{
 		"mode":   model.PromptModeTxt2Img,
 		"prompt": "hello-reroll",
+		"model":  "gemini-3-pro-image",
 		"width":  512,
 		"height": 512,
 	})
@@ -366,7 +443,7 @@ func TestRerollContract(t *testing.T) {
 		t.Fatalf("reroll should append result: before=%d after=%d", resultCountBefore, resultCountAfter)
 	}
 
-	invalidRec := performJSONRequest(t, router, http.MethodPost, "/api/prompts/"+createPayload.Node.ID+"/reroll", map[string]any{"prompt": "override"})
+	invalidRec := performJSONRequest(t, router, http.MethodPost, "/api/prompts/"+createPayload.Node.ID+"/reroll", map[string]any{"prompt": "override", "model": "gpt-image-2"})
 	if invalidRec.Code != http.StatusBadRequest {
 		t.Fatalf("expected reroll override rejected, got: %d", invalidRec.Code)
 	}
@@ -429,6 +506,7 @@ func TestGeneratePersistsAndReturnsFragments(t *testing.T) {
 	createRec := performJSONRequest(t, router, http.MethodPost, "/api/generate", map[string]any{
 		"mode":      model.PromptModeTxt2Img,
 		"prompt":    "plain prompt",
+		"model":     "gemini-3-pro-image",
 		"fragments": fragments,
 		"width":     512,
 		"height":    512,
@@ -539,6 +617,7 @@ func TestGenerateRejectsInvalidFragments(t *testing.T) {
 	validRec := performJSONRequest(t, router, http.MethodPost, "/api/generate", map[string]any{
 		"mode":      model.PromptModeTxt2Img,
 		"prompt":    "hello",
+		"model":     "gemini-3-pro-image",
 		"fragments": validState,
 		"width":     512,
 		"height":    512,
@@ -550,6 +629,7 @@ func TestGenerateRejectsInvalidFragments(t *testing.T) {
 	numericRec := performJSONRequest(t, router, http.MethodPost, "/api/generate", map[string]any{
 		"mode":      model.PromptModeTxt2Img,
 		"prompt":    "hello-numeric-ts",
+		"model":     "gemini-3-pro-image",
 		"fragments": numericTimestampPromptCollectionState(),
 		"width":     512,
 		"height":    512,
@@ -581,6 +661,7 @@ func TestGenerateRerollKeepsFragments(t *testing.T) {
 	createRec := performJSONRequest(t, router, http.MethodPost, "/api/generate", map[string]any{
 		"mode":      model.PromptModeTxt2Img,
 		"prompt":    "hello-reroll",
+		"model":     "gemini-3-pro-image",
 		"fragments": validPromptCollectionState(),
 		"width":     512,
 		"height":    512,
@@ -615,5 +696,281 @@ func TestGenerateRerollKeepsFragments(t *testing.T) {
 	}
 	if !reflect.DeepEqual(persisted.Fragments, createPayload.Node.Fragments) {
 		t.Fatalf("persisted reroll fragments mismatch: got=%#v want=%#v", persisted.Fragments, createPayload.Node.Fragments)
+	}
+}
+
+// --- Group 4D: registry-driven validation + reroll model overrides ---
+
+func baseGenerateBody() map[string]any {
+	return map[string]any{
+		"mode":   model.PromptModeTxt2Img,
+		"prompt": "hello",
+		"width":  512,
+		"height": 512,
+	}
+}
+
+func TestGenerate_missingModel_400invalid(t *testing.T) {
+	router, _, _ := setupGenerateRouter(t)
+
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/generate", baseGenerateBody())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 missing model, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload["error"] != "invalid" {
+		t.Fatalf("expected error=invalid, got: %#v", payload["error"])
+	}
+}
+
+func TestGenerate_unknownModel_400invalid(t *testing.T) {
+	router, _, _ := setupGenerateRouter(t)
+	body := baseGenerateBody()
+	body["model"] = "never-heard-of"
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/generate", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 unknown model, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&payload)
+	if payload["error"] != "invalid" {
+		t.Fatalf("expected error=invalid, got: %#v", payload["error"])
+	}
+}
+
+func TestGenerate_disabledModel_400modelDisabled(t *testing.T) {
+	router, _, _ := setupGenerateRouter(t)
+	body := baseGenerateBody()
+	body["model"] = "disabled-model"
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/generate", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 disabled model, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&payload)
+	if payload["error"] != "model_disabled" {
+		t.Fatalf("expected error=model_disabled, got: %#v", payload["error"])
+	}
+}
+
+func TestGenerate_sizeNotInModelAllowlist_400invalid(t *testing.T) {
+	router, _, _ := setupGenerateRouter(t)
+	body := baseGenerateBody()
+	body["model"] = "gpt-image-2"
+	body["image_size"] = "4K" // gpt-image-2 only allows 1K/2K
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/generate", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 size not in allowlist, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&payload)
+	if payload["error"] != "invalid" {
+		t.Fatalf("expected error=invalid, got: %#v", payload["error"])
+	}
+}
+
+func TestGenerate_ratioNotInModelAllowlist_400invalid(t *testing.T) {
+	router, _, _ := setupGenerateRouter(t)
+	body := baseGenerateBody()
+	body["model"] = "gpt-image-2"
+	body["aspect_ratio"] = "21:9" // only gemini allows 21:9
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/generate", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 ratio not in allowlist, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&payload)
+	if payload["error"] != "invalid" {
+		t.Fatalf("expected error=invalid, got: %#v", payload["error"])
+	}
+}
+
+func TestGenerate_validRequest_200_withModelIDPersisted(t *testing.T) {
+	router, db, _, recorder := setupGenerateRouterWithRecorder(t)
+
+	body := baseGenerateBody()
+	body["model"] = "gpt-image-2"
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/generate", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Node model.Node `json:"node"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Node.ModelID != "gpt-image-2" {
+		t.Fatalf("expected response node.model_id=gpt-image-2, got: %q", payload.Node.ModelID)
+	}
+
+	var persisted model.Node
+	if err := db.First(&persisted, "id = ?", payload.Node.ID).Error; err != nil {
+		t.Fatalf("load persisted node: %v", err)
+	}
+	if persisted.ModelID != "gpt-image-2" {
+		t.Fatalf("expected persisted model_id=gpt-image-2, got: %q", persisted.ModelID)
+	}
+
+	proxyBody := recorder.last()
+	if proxyBody == nil {
+		t.Fatalf("expected proxy to have received a request body")
+	}
+	if proxyBody["model"] != "gpt-image-2" {
+		t.Fatalf("expected proxy body.model=gpt-image-2, got: %#v", proxyBody["model"])
+	}
+}
+
+func seedNodeForReroll(t *testing.T, router *gin.Engine, modelID string) string {
+	t.Helper()
+	body := baseGenerateBody()
+	body["model"] = modelID
+	body["prompt"] = "seed-" + modelID
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/generate", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("seed node failed: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Node model.Node `json:"node"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode seed response: %v", err)
+	}
+	return payload.Node.ID
+}
+
+func TestReroll_withoutModel_usesNodeModelID(t *testing.T) {
+	router, _, _, recorder := setupGenerateRouterWithRecorder(t)
+
+	nodeID := seedNodeForReroll(t, router, "gpt-image-2")
+
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/prompts/"+nodeID+"/reroll", map[string]any{})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	proxyBody := recorder.last()
+	if proxyBody == nil {
+		t.Fatalf("expected proxy request recorded")
+	}
+	if proxyBody["model"] != "gpt-image-2" {
+		t.Fatalf("expected proxy body.model=gpt-image-2, got: %#v", proxyBody["model"])
+	}
+}
+
+func TestReroll_withValidModel_writesBackAndOverrides(t *testing.T) {
+	router, db, _, recorder := setupGenerateRouterWithRecorder(t)
+
+	nodeID := seedNodeForReroll(t, router, "gemini-3-pro-image")
+
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/prompts/"+nodeID+"/reroll", map[string]any{
+		"model": "gpt-image-2",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	proxyBody := recorder.last()
+	if proxyBody == nil {
+		t.Fatalf("expected proxy request recorded")
+	}
+	if proxyBody["model"] != "gpt-image-2" {
+		t.Fatalf("expected proxy body.model=gpt-image-2 after override, got: %#v", proxyBody["model"])
+	}
+
+	var persisted model.Node
+	if err := db.First(&persisted, "id = ?", nodeID).Error; err != nil {
+		t.Fatalf("load persisted node: %v", err)
+	}
+	if persisted.ModelID != "gpt-image-2" {
+		t.Fatalf("expected persisted model_id=gpt-image-2 after reroll override, got: %q", persisted.ModelID)
+	}
+}
+
+func TestReroll_withUnknownModel_400invalid(t *testing.T) {
+	router, _, _ := setupGenerateRouter(t)
+	nodeID := seedNodeForReroll(t, router, "gpt-image-2")
+
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/prompts/"+nodeID+"/reroll", map[string]any{
+		"model": "never-heard-of",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&payload)
+	if payload["error"] != "invalid" {
+		t.Fatalf("expected error=invalid, got: %#v", payload["error"])
+	}
+}
+
+func TestReroll_withDisabledModel_400modelDisabled(t *testing.T) {
+	router, _, _ := setupGenerateRouter(t)
+	nodeID := seedNodeForReroll(t, router, "gpt-image-2")
+
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/prompts/"+nodeID+"/reroll", map[string]any{
+		"model": "disabled-model",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&payload)
+	if payload["error"] != "model_disabled" {
+		t.Fatalf("expected error=model_disabled, got: %#v", payload["error"])
+	}
+}
+
+func TestReroll_withBadCombo_400invalid(t *testing.T) {
+	router, _, _ := setupGenerateRouter(t)
+	nodeID := seedNodeForReroll(t, router, "gpt-image-2")
+
+	// gpt-image-2 does not allow 4K
+	rec := performJSONRequest(t, router, http.MethodPost, "/api/prompts/"+nodeID+"/reroll", map[string]any{
+		"model":      "gpt-image-2",
+		"image_size": "4K",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&payload)
+	if payload["error"] != "invalid" {
+		t.Fatalf("expected error=invalid, got: %#v", payload["error"])
+	}
+}
+
+func TestNodesAPI_legacyDisabledModel_stillReadable(t *testing.T) {
+	// Seed a PromptNode with model_id for a disabled/legacy model and ensure
+	// /api/nodes/:id still returns it with the model_id intact.
+	router, db, _ := setupGenerateRouter(t)
+	router.GET("/api/nodes/:id", (&NodesHandler{DB: db}).Get)
+
+	legacyNode := model.PromptNode{
+		ID:         "legacy-node-1",
+		Mode:       model.PromptModeTxt2Img,
+		Prompt:     "legacy",
+		ModelID:    "disabled-model",
+		Title:      "legacy",
+		LastUsedAt: mustParseRFC3339(t, "2026-02-08T00:00:00Z"),
+	}
+	if err := db.Create(&legacyNode).Error; err != nil {
+		t.Fatalf("create legacy node: %v", err)
+	}
+
+	rec := performJSONRequest(t, router, http.MethodGet, "/api/nodes/"+legacyNode.ID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for legacy disabled node, got: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Node map[string]any `json:"node"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Node["model_id"] != "disabled-model" {
+		t.Fatalf("expected node.model_id=disabled-model, got: %#v", payload.Node["model_id"])
 	}
 }

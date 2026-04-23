@@ -1,5 +1,13 @@
 export type PromptMode = 'txt2img' | 'img2img';
 
+export interface ModelInfo {
+  id: string;
+  label: string;
+  allowed_sizes: string[];
+  allowed_aspect_ratios: string[];
+  default_size: string;
+}
+
 export interface PromptFragment {
   type: string;
   text?: string;
@@ -43,6 +51,7 @@ export interface PromptNode<TFragments = PromptCollectionState> {
   cfg_scale?: number;
   aspect_ratio?: string;
   image_size?: string;
+  model_id?: string;
   seed?: number;
   steps?: number;
   reference_image_ids?: string[];
@@ -101,6 +110,7 @@ export interface GenerateRequest {
   reference_image_ids: string[];
   width: number;
   height: number;
+  model: string;
 }
 
 export interface GenerateResponse {
@@ -305,11 +315,12 @@ export const api = {
     return apiFetch<{ node: PromptNode<PromptFragment[]>; images: Image[]; results?: Result[] }>(`/api/nodes/${id}`);
   },
 
-  async reroll(id: string, options?: { request_id?: string; aspect_ratio?: string; image_size?: string }): Promise<GenerateResponse> {
-    const body: { request_id?: string; aspect_ratio?: string; image_size?: string } = {};
+  async reroll(id: string, options?: { request_id?: string; aspect_ratio?: string; image_size?: string; model?: string }): Promise<GenerateResponse> {
+    const body: { request_id?: string; aspect_ratio?: string; image_size?: string; model?: string } = {};
     if (options?.request_id) body.request_id = options.request_id;
     if (options?.aspect_ratio) body.aspect_ratio = options.aspect_ratio;
     if (options?.image_size) body.image_size = options.image_size;
+    if (options?.model) body.model = options.model;
     return apiFetch<GenerateResponse>(`/api/prompts/${id}/reroll`, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -336,3 +347,8 @@ export const api = {
     });
   },
 };
+
+export async function getModels(): Promise<ModelInfo[]> {
+  const res = await apiFetch<{ models: ModelInfo[] }>('/api/models');
+  return res.models;
+}

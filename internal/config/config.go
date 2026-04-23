@@ -11,7 +11,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config holds runtime configuration loaded from environment variables.
+// Model describes a single image-generation model registered in config.yaml.
+type Model struct {
+	ID                  string   `yaml:"id"`
+	Label               string   `yaml:"label"`
+	Enabled             bool     `yaml:"enabled"`
+	AllowedSizes        []string `yaml:"allowed_sizes"`
+	AllowedAspectRatios []string `yaml:"allowed_aspect_ratios"`
+	DefaultSize         string   `yaml:"default_size"`
+}
+
+// Config holds runtime configuration loaded from environment variables and config.yaml.
 type Config struct {
 	ServerPort           int           `yaml:"server_port"`
 	StorageRoot          string        `yaml:"storage_root"`
@@ -19,7 +29,7 @@ type Config struct {
 	ProxyBaseURL         string        `yaml:"proxy_base_url"`
 	ProxyAuthHeaderName  string        `yaml:"proxy_auth_header_name"`
 	ProxyAuthHeaderValue string        `yaml:"proxy_auth_header_value"`
-	ModelID              string        `yaml:"model_id"`
+	Models               []Model       `yaml:"models"`
 	GenerateTimeout      time.Duration `yaml:"generate_timeout"`
 	MaxConcurrent        int           `yaml:"max_concurrent"`
 	LibraryPageSize      int           `yaml:"library_page_size"`
@@ -55,8 +65,7 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 
-	cfg.ModelID, err = requiredValue("MODEL_ID", cfg.ModelID)
-	if err != nil {
+	if err := validateModels(cfg.Models); err != nil {
 		return Config{}, err
 	}
 
@@ -136,8 +145,8 @@ func applyConfig(dst *Config, src Config) {
 	if strings.TrimSpace(src.ProxyAuthHeaderValue) != "" {
 		dst.ProxyAuthHeaderValue = src.ProxyAuthHeaderValue
 	}
-	if strings.TrimSpace(src.ModelID) != "" {
-		dst.ModelID = src.ModelID
+	if src.Models != nil && len(src.Models) > 0 {
+		dst.Models = append([]Model(nil), src.Models...)
 	}
 	if src.GenerateTimeout != 0 {
 		dst.GenerateTimeout = src.GenerateTimeout
@@ -209,4 +218,28 @@ func optionalDurationEnv(key string, defaultValue time.Duration) (time.Duration,
 	}
 
 	return parsed, nil
+}
+
+// validateModels enforces invariants over the model registry loaded from
+// config.yaml. The registry has no environment-variable bridge; config.yaml
+// is the sole source of truth.
+func validateModels(models []Model) error {
+	if len(models) == 0 {
+		return fmt.Errorf("配置 models 不能为空: 至少需要一个模型")
+	}
+	if !models[0].Enabled {
+		return fmt.Errorf("配置 models[0] (%s) 必须 enabled=true (默认模型必须可用)", models[0].ID)
+	}
+	seen := make(map[string]struct{}, len(models))
+	for i, m := range models {
+		id := strings.TrimSpace(m.ID)
+		if id == "" {
+			return fmt.Errorf("配置 models[%d].id 不能为空", i)
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("配置 models 中存在重复 id: %s", id)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
 }

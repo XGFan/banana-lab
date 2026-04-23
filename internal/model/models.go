@@ -176,6 +176,7 @@ type PromptNode struct {
 	ParentID          *string               `gorm:"column:parent_id;index" json:"parent_id,omitempty"`
 	Mode              string                `gorm:"column:mode;not null;index:idx_prompt_nodes_mode_pinned_last_used,priority:1" json:"mode"`
 	Prompt            string                `gorm:"column:prompt;not null" json:"prompt"`
+	ModelID           string                `gorm:"column:model_id;not null;default:'';index" json:"model_id"`
 	Fragments         PromptCollectionState `gorm:"column:fragments;type:text" json:"fragments"`
 	Title             string                `gorm:"column:title;not null" json:"title"`
 	Pinned            bool                  `gorm:"column:pinned;not null;default:false;index:idx_prompt_nodes_mode_pinned_last_used,priority:2" json:"pinned"`

@@ -38,7 +38,7 @@
 
 - `PROXY_BASE_URL`
 - `PROXY_AUTH_HEADER_VALUE`
-- `MODEL_ID`
+- `models:` 数组（见下文"支持的模型"）
 
 本仓库默认提供了 `config.yaml`，可直接：
 
@@ -145,7 +145,6 @@ npm run test:e2e
 |---|---|---|---|
 | `PROXY_BASE_URL` | 是 | 无 | 上游推理服务地址 |
 | `PROXY_AUTH_HEADER_VALUE` | 是 | 无 | 上游鉴权值 |
-| `MODEL_ID` | 是 | 无 | 生成模型 ID |
 | `SERVER_PORT` | 否 | `8080` | 服务监听端口 |
 | `STORAGE_ROOT` | 否 | `./storage` | 存储目录 |
 | `DB_PATH` | 否 | `<storage_root>/banana-lab.db` | SQLite 文件路径 |
@@ -155,6 +154,27 @@ npm run test:e2e
 | `GENERATE_TIMEOUT` | 否 | `120s` | 生成超时 |
 
 > 注意：请勿在公开仓库提交真实凭据。生产环境建议仅通过安全的环境变量注入敏感配置。
+
+**模型选择说明**：模型注册表由 `config.yaml` 中的 `models:` 数组驱动（见下文"支持的模型"）。`MODEL_ID` 环境变量已弃用，不再被读取。
+
+**从 `MODEL_ID` 时代升级**：移除 `config.yaml` 中旧的 `model_id:` 行（若存在，会被静默忽略）；改为使用 `models:` 数组（见下例）。既无 `models:` 也无 `model_id:` 的部署会在启动时失败，并提示明确的错误信息。
+
+---
+
+## 支持的模型（`config.yaml` 中的 `models:` 注册表）
+
+服务器接受一个模型条目列表。第一个条目为默认模型。每个条目的字段如下：
+
+| 字段 | 说明 |
+|---|---|
+| `id` | 模型上游标识（例如 `gpt-image-2`、`gemini-3-pro-image`） |
+| `label` | UI 显示名 |
+| `enabled` | `true` 则模型在 UI 中可选；`false` 则对 UI 隐藏，但仍允许读取历史节点的 `model_id` |
+| `allowed_sizes` | 该模型可用的 `image_size`，如 `["1K", "2K"]` |
+| `allowed_aspect_ratios` | 该模型可用的 `aspect_ratio` |
+| `default_size` | 未指定时的默认尺寸 |
+
+示例见 `config.yaml`。
 
 ---
 

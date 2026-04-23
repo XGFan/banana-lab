@@ -70,8 +70,10 @@ func main() {
 		Storage: store,
 		Proxy:   proxy,
 		Limiter: limiter,
-		ModelID: cfg.ModelID,
 	}
+	registry := config.NewRegistry(cfg.Models)
+	generateHandler := &api.GenerateHandler{Service: genSvc, Registry: registry}
+	modelsHandler := &api.ModelsHandler{Registry: registry}
 
 	uiFS, _ := webui.FS()
 
@@ -91,14 +93,15 @@ func main() {
 	apiGroup.DELETE("/prompt-snippets/:id", promptSnippetsHandler.Delete)
 	apiGroup.GET("/prompts/:id/tree", (&api.PromptTreeHandler{DB: db}).Get)
 	apiGroup.DELETE("/prompts/:id", nodesHandler.Delete)
-	apiGroup.POST("/prompts/:id/reroll", (&api.GenerateHandler{Service: genSvc}).Reroll)
+	apiGroup.POST("/prompts/:id/reroll", generateHandler.Reroll)
 	apiGroup.GET("/nodes/:id", nodesHandler.Get)
 	apiGroup.DELETE("/nodes/:id", nodesHandler.Delete)
 	apiGroup.DELETE("/results/:id", resultsHandler.Delete)
 	apiGroup.GET("/archive", archiveHandler.List)
 	apiGroup.GET("/library", libraryHandler.List)
+	apiGroup.GET("/models", modelsHandler.List)
 	apiGroup.POST("/upload", (&api.UploadHandler{DB: db, Storage: store}).Handle)
-	apiGroup.POST("/generate", (&api.GenerateHandler{Service: genSvc}).Handle)
+	apiGroup.POST("/generate", generateHandler.Handle)
 
 	router.NoRoute(func(c *gin.Context) {
 		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {

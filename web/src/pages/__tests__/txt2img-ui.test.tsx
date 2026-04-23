@@ -23,6 +23,7 @@ vi.mock('../../lib/api', () => ({
     updatePromptSnippet: vi.fn(),
     deletePromptSnippet: vi.fn(),
   },
+  getModels: vi.fn().mockResolvedValue([]),
   imageUrl: (img: any) => img?.file_path || '',
 }));
 
@@ -220,6 +221,89 @@ describe('Txt2ImgPage UI', () => {
       expect(screen.getByTestId('prompt-editor-sdk-modal')).toBeInTheDocument();
     });
   });
+
+  it('resets image_size when model change makes current size unsupported', async () => {
+    const geminiModel = {
+      id: 'gemini-3-pro-image',
+      label: 'Gemini',
+      allowed_sizes: ['1K', '2K', '4K'],
+      allowed_aspect_ratios: ['1:1', '3:2', '21:9'],
+      default_size: '1K',
+    }
+    const gptModel = {
+      id: 'gpt-image-2',
+      label: 'GPT Image 2',
+      allowed_sizes: ['1K', '2K'],
+      allowed_aspect_ratios: ['1:1', '3:2'],
+      default_size: '1K',
+    }
+    const { getModels: mockGetModels } = await import('../../lib/api')
+    ;(mockGetModels as ReturnType<typeof vi.fn>).mockResolvedValue([geminiModel, gptModel])
+
+    render(
+      <MemoryRouter>
+        <Txt2ImgPage />
+      </MemoryRouter>
+    )
+
+    // Wait for models to load and first model (gemini) to be selected
+    await waitFor(() => {
+      expect(screen.getByLabelText(/image size/i)).toBeInTheDocument()
+    })
+
+    // Select 4K (only allowed in gemini)
+    fireEvent.change(screen.getByLabelText(/image size/i), { target: { value: '4K' } })
+    expect(screen.getByLabelText(/image size/i)).toHaveValue('4K')
+
+    // Switch to gpt-image-2 which only allows 1K/2K
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'gpt-image-2' } })
+
+    // image_size should be reset to gpt-image-2's default_size
+    await waitFor(() => {
+      expect(screen.getByLabelText(/image size/i)).toHaveValue('1K')
+    })
+  })
+
+  it('resets aspect_ratio when model change makes current ratio unsupported', async () => {
+    const geminiModel = {
+      id: 'gemini-3-pro-image',
+      label: 'Gemini',
+      allowed_sizes: ['1K', '2K', '4K'],
+      allowed_aspect_ratios: ['1:1', '3:2', '21:9'],
+      default_size: '1K',
+    }
+    const gptModel = {
+      id: 'gpt-image-2',
+      label: 'GPT Image 2',
+      allowed_sizes: ['1K', '2K'],
+      allowed_aspect_ratios: ['1:1', '3:2'],
+      default_size: '1K',
+    }
+    const { getModels: mockGetModels } = await import('../../lib/api')
+    ;(mockGetModels as ReturnType<typeof vi.fn>).mockResolvedValue([geminiModel, gptModel])
+
+    render(
+      <MemoryRouter>
+        <Txt2ImgPage />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/aspect ratio/i)).toBeInTheDocument()
+    })
+
+    // Select 21:9 (only allowed in gemini)
+    fireEvent.change(screen.getByLabelText(/aspect ratio/i), { target: { value: '21:9' } })
+    expect(screen.getByLabelText(/aspect ratio/i)).toHaveValue('21:9')
+
+    // Switch to gpt-image-2 which doesn't allow 21:9
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'gpt-image-2' } })
+
+    // aspect_ratio should be reset to first allowed ratio
+    await waitFor(() => {
+      expect(screen.getByLabelText(/aspect ratio/i)).toHaveValue('1:1')
+    })
+  })
 
   it('handles fork flow correctly: prefill, open modal, and maintain parent semantics', async () => {
     (api.getNode as any).mockResolvedValue({

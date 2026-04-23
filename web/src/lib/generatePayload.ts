@@ -50,6 +50,7 @@ type Txt2ImgPayloadInput = {
   stepsText?: string
   aspectRatio: string
   imageSize?: string
+  model?: string
 }
 
 type Img2ImgPayloadInput = {
@@ -59,6 +60,7 @@ type Img2ImgPayloadInput = {
   referenceImageIds: string[]
   aspectRatio?: string
   imageSize?: string
+  model?: string
 }
 
 export const buildTxt2ImgPayload = (input: Txt2ImgPayloadInput): GenerateRequest => {
@@ -66,7 +68,8 @@ export const buildTxt2ImgPayload = (input: Txt2ImgPayloadInput): GenerateRequest
   const cfgScaleTrimmed = input.cfgScaleText?.trim()
   const stepsTrimmed = input.stepsText?.trim()
   const imageSize = input.imageSize ?? '1K'
-  const { width, height } = getDimensions(imageSize, input.aspectRatio)
+  const model = input.model ?? ''
+  const { width, height } = getDimensions(model, imageSize, input.aspectRatio)
 
   return {
     mode: 'txt2img',
@@ -81,13 +84,15 @@ export const buildTxt2ImgPayload = (input: Txt2ImgPayloadInput): GenerateRequest
     width,
     height,
     reference_image_ids: [],
+    model,
   }
 }
 
 export const buildImg2ImgPayload = (input: Img2ImgPayloadInput): GenerateRequest => {
   const imageSize = input.imageSize ?? '1K'
   const aspectRatio = input.aspectRatio ?? '1:1'
-  const { width, height } = getDimensions(imageSize, aspectRatio)
+  const model = input.model ?? ''
+  const { width, height } = getDimensions(model, imageSize, aspectRatio)
 
   return {
     mode: 'img2img',
@@ -99,5 +104,6 @@ export const buildImg2ImgPayload = (input: Img2ImgPayloadInput): GenerateRequest
     width,
     height,
     reference_image_ids: input.referenceImageIds,
+    model,
   }
 }
